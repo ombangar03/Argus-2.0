@@ -1,99 +1,135 @@
-import asyncio
-from app.platform.mongodb import check_mongodb, rss_requests, rss_items
+# import asyncio
+from fastapi import FastAPI
+
+from app.api.health import router as health_router
 from app.core.logging import setup_logging
-from app.platform.mongodb import check_mongodb
-from app.platform.redis import check_redis
 
 
-async def create_index():
-    print()
+# from app.platform.mongodb import check_mongodb, rss_requests, rss_items
+# from app.core.logging import setup_logging
+# from app.platform.mongodb import check_mongodb
+# from app.platform.redis import check_redis
 
-    print("Creating MongoDB Indexes....")
-    try:
-        request_index = await rss_requests.create_index(
-            "url_has",
-            unique=True
-        )
 
-        print("Create rss_requests index:", request_index)
+setup_logging()
 
-        item_index = await rss_items.create_index(
-            "item_hash",
-             unique=True
-        )
+app = FastAPI(
+    title="Argus Orchestrator",
+    version="2.0"
+)
 
-        print("Created rss_items index:", item_index)
+app.include_router(
+    health_router
+)
 
-        print("MongoDB index created successfully")
-
-    except Exception as exc:
-        print("Failed to create MongoDB indexes")
-
-        print("Failed to create MongoDB indexes")
-
-        print("Error:", exc)
+@app.get("/")
+async def root():
+    return {
+        "service": "argus-orchestrator",
+        "status": "running"
+    }
 
 
 
-async def main():
-
-    setup_logging()
-
-    print()
-    print("======================================")
-    print("      ARGUS ORCHESTROE STARTING       ")
-    print("======================================")
 
 
-    # mongodb
-    mongo_status = await check_mongodb()
-
-    if mongo_status:
-        await create_index()
-    print()
-
-    # redis
-    redis_status = await check_redis()
-    print()
 
 
-    #-------------------------------
-    #Final status
-    # ------------------------------
 
-    print("================================================")
-    print("Connection Status")
 
-    print(
-        "MongoDB:",
-        "Connected" if mongo_status else "Failed"
-    )
 
-    print(
-        "Redis:",
-        "Connected" if redis_status else "Failed"
-    )
 
-    print("========================================================")
 
-    if not mongo_status or not redis_status:
-        print()
 
-        print(
-            "Orchestrator status FAiled"
-        )
+# async def create_index():
+#     print()
 
-        print(
-            "Please check MongoDB and Redis"
-        )
+#     print("Creating MongoDB Indexes....")
+#     try:
+#         request_index = await rss_requests.create_index(
+#             "url_has",
+#             unique=True
+#         )
 
-        return 
+#         print("Create rss_requests index:", request_index)
 
-    print()
-    print(
-        "Orchestrator foundation is healthy!"
-    )
-    print()
+#         item_index = await rss_items.create_index(
+#             "item_hash",
+#              unique=True
+#         )
 
-if __name__ == "__main__":
-    asyncio.run(main())
+#         print("Created rss_items index:", item_index)
+
+#         print("MongoDB index created successfully")
+
+#     except Exception as exc:
+#         print("Failed to create MongoDB indexes")
+
+#         print("Failed to create MongoDB indexes")
+
+#         print("Error:", exc)
+
+
+
+# async def main():
+
+#     setup_logging()
+
+#     print()
+#     print("======================================")
+#     print("      ARGUS ORCHESTROE STARTING       ")
+#     print("======================================")
+
+
+#     # mongodb
+#     mongo_status = await check_mongodb()
+
+#     if mongo_status:
+#         await create_index()
+#     print()
+
+#     # redis
+#     redis_status = await check_redis()
+#     print()
+
+
+#     #-------------------------------
+#     #Final status
+#     # ------------------------------
+
+#     print("================================================")
+#     print("Connection Status")
+
+#     print(
+#         "MongoDB:",
+#         "Connected" if mongo_status else "Failed"
+#     )
+
+#     print(
+#         "Redis:",
+#         "Connected" if redis_status else "Failed"
+#     )
+
+#     print("========================================================")
+
+#     if not mongo_status or not redis_status:
+#         print()
+
+#         print(
+#             "Orchestrator status FAiled"
+#         )
+
+#         print(
+#             "Please check MongoDB and Redis"
+#         )
+
+#         return 
+
+#     print()
+#     print(
+#         "Orchestrator foundation is healthy!"
+#     )
+#     print()
+
+# if __name__ == "__main__":
+#     asyncio.run(main())
