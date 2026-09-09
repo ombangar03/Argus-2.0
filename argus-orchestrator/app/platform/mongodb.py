@@ -33,9 +33,7 @@ async def check_mongodb():
         await mongo_client.admin.command("ping")  # this sends actual request to mongodb
         print("MongoDB connection successful!")
 
-        logger.info(
-            "MongoDB connection successful."
-        )
+        logger.info("MongoDB connection successful.")
 
         return True
 
