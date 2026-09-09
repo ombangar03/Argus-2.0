@@ -42,8 +42,6 @@ async def check_mongodb():
         print("Error:", exc)
 
 
-        logger.exception(
-            "MongoDB connection failed"
-        )
+        logger.exception("MongoDB connection failed")
 
         return False
