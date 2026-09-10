@@ -49,6 +49,7 @@ async def dispatch_rss_request() -> Optional[RSSRequests]:
         ) 
 
         # 3. Publish to Redis stream
+        # this is where the job leaves orchestrator. queue:connector:rss
         stream_message_id = await redis_client.xadd(
             settings.connector_stream,
             request_obj.model_dump()
@@ -123,4 +124,4 @@ if __name__ == "__main__":
         else:
             print("[INFO] No pending request found to dispatch.")
 
-    asyncio.run(_run())
+    asyncio.run(_run())
