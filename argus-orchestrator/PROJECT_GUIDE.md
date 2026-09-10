@@ -330,20 +330,45 @@ class RSSRequests(BaseModel):
 
 ---
 
-### File 11: `app/services/result_service.py` - Article Storage & Request Completion (Upcoming)
-* **Purpose:** Will read incoming `CrawlResult` payloads:
-  - Validates article fields.
-  - Bulk-inserts articles into `rss_items` collection using an `upsert` or deduplication index on `item_hash`.
-  - Updates the original `rss_requests` document status from `"processing"` to `"completed"` (or `"failed"`).
+### File 11: `app/services/result_service.py` - Article Storage & Request Completion
+* **Purpose:** The inbound business logic engine. Ingests `CrawlResult` payloads received from the connector, batch-upserts articles into MongoDB with zero duplicates, transitions request status to `"completed"` or `"failed"`, and ensures high-performance indexes.
+* **Key Architecture & Mechanics:**
+  1. **Index Assurance (`ensure_indexes`)**:
+     - Creates a unique index on `rss_items.item_hash` (guaranteeing article uniqueness at the database level).
+     - Creates index on `rss_items.request_id` and `rss_items.published_at` for rapid querying.
+     - Creates index on `rss_requests.request_id` for instantaneous status transitions.
+  2. **Zero-Duplicate Bulk Upsert (`save_rss_items`)**:
+     - Uses `pymongo.UpdateOne` with `$setOnInsert` and `upsert=True`:
+       ```python
+       UpdateOne(
+           {"item_hash": item.item_hash},
+           {"$setOnInsert": item.model_dump()},
+           upsert=True
+       )
+       ```
+     - **Why `$setOnInsert`?** If an article already exists from a previous crawl, its original `created_at` timestamp is preserved rather than overwritten.
+     - Uses `bulk_write(operations, ordered=False)` so MongoDB can write in parallel over a single network trip.
+  3. **State Machine Transition (`process_crawl_result`)**:
+     - Validates payload against `CrawlResult`.
+     - **If `status == "success"`**: Saves articles, updates `rss_requests` (`status: "completed"`, `items_count`, `new_items_count`, `completed_at`).
+     - **If `status == "failed"`**: Updates `rss_requests` (`status: "failed"`, `error_message`, `completed_at`).
+  4. **Executable Self-Test**:
+     - Run `python -m app.services.result_service` to test index generation, article insertion, and deduplication verification.
 
 ---
 
-### File 12: `app/workers/result_worker.py` - Redis Result Consumer (Upcoming)
-* **Purpose:** The background consumer loop:
+### File 12: `app/workers/result_worker.py` - Redis Result Consumer Daemon
+* **Purpose:** The continuous background daemon (The "Inbound Ingestor"):
   - Connects to Redis Stream `connector:rss:results` using consumer group `orchestrator-results`.
-  - Reads new result messages using `xreadgroup()`.
-  - Passes results to `result_service.py` to save to MongoDB.
-  - Sends `xack()` to Redis to acknowledge successful processing.
+  - Reads new result messages in batches using `xreadgroup()`.
+  - Deserializes JSON payloads and passes results to `process_crawl_result()` in `result_service.py` to save articles to MongoDB.
+  - Sends `xack()` to Redis upon successful persistence so messages are never dropped or reprocessed.
+* **Key Mechanics:**
+  1. **Pre-flight Health**: Verifies MongoDB & Redis availability before starting.
+  2. **Automatic Group Creation (`_setup_consumer_group`)**: Uses `xgroup_create` with `mkstream=True`, catching `BUSYGROUP` if already created.
+  3. **Payload Flexibility**: Automatically detects and decodes JSON-serialized article strings (`items` or `payload` fields) sent by connector workers.
+  4. **At-Least-Once Delivery**: Only calls `xack()` after `process_crawl_result()` successfully completes, ensuring Redis retains messages if a crash occurs.
+  5. **Signal & Stop Handling**: Responsive shutdown via `asyncio.Event` and signal handlers (`SIGINT`, `SIGTERM`).
 
 ---
 
@@ -356,8 +381,10 @@ class RSSRequests(BaseModel):
 [x] Phase 4: Atomic Request Dispatch Service (app/services/request_service.py)
 [x] Phase 5: Outbound Request Worker Daemon (app/workers/request_worker.py)
 [x] Phase 6: Inbound Result Schema (app/schemas/result.py)
+[x] Phase 7: Result Ingestion Service (app/services/result_service.py)
+[x] Phase 8: Inbound Result Worker Consumer (app/workers/result_worker.py)
 ─────────────────────────────────────────────────────────────────────────────
-[ ] Phase 7: Result Ingestion Service (app/services/result_service.py) <-- CURRENT STEP
-[ ] Phase 8: Inbound Result Worker Consumer (app/workers/result_worker.py)
-[ ] Phase 9: Connector Worker Implementation (argus-connector repo)
+[ ] Phase 9: Connector Worker Implementation (argus-connector repo) <-- CURRENT STEP
 ```
+
+
