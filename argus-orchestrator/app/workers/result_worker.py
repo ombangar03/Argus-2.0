@@ -85,14 +85,14 @@ class ResultWorker:
         """
         Starts the continuous consumer worker loop.
         """
-        self._is_running = True
-        self._stop_event.clear()
+        self._is_running = True  # worker =  running
+        self._stop_event.clear() # stop signal = OFF.
 
         logger.info("Initializing Result Worker...")
 
         # 1. Pre-flight health checks
-        mongo_ok = await check_mongodb()
-        redis_ok = await check_redis()
+        mongo_ok = await check_mongodb()  # is mongodb healthy?
+        redis_ok = await check_redis()    # is redis healthy?
 
         if not mongo_ok or not redis_ok:
             logger.error("Database or Redis is not healthy. Result Worker cannot start.")
@@ -145,7 +145,7 @@ class ResultWorker:
                         except Exception as item_exc:
                             logger.exception(
                                 f"Failed to process result message {message_id}: {item_exc}"
-                            )
+                            )  # redis will still consider the message is pending for the consumer group
 
             except asyncio.CancelledError:
                 logger.info("Result Worker received cancellation signal.")
@@ -153,7 +153,7 @@ class ResultWorker:
 
             except Exception as exc:
                 logger.exception(f"Unexpected error in Result Worker loop: {exc}")
-                await asyncio.sleep(5.0)
+                await asyncio.sleep(5.0)   # wait for 5 sec and try again.
 
         logger.info("Result Worker loop has exited.")
 
