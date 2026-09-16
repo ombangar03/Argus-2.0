@@ -1,26 +1,45 @@
-# import asyncio
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.health import router as health_router
 from app.core.logging import setup_logging
-
-
-# from app.platform.mongodb import check_mongodb, rss_requests, rss_items
-# from app.core.logging import setup_logging
-# from app.platform.mongodb import check_mongodb
-# from app.platform.redis import check_redis
-
+from app.workers.request_worker import RequestWorker
+from app.workers.result_worker import ResultWorker
 
 setup_logging()
 
+request_worker = RequestWorker(poll_interval=2.0)
+result_worker = ResultWorker(block_ms=2000, batch_size=10)
+background_tasks = []
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Starts both Orchestrator workers on FastAPI startup."""
+    print("🚀 Argus Orchestrator starting up on Port 8000...")
+
+    # Launch outbound dispatcher and inbound ingestor
+    t1 = asyncio.create_task(request_worker.start())
+    t2 = asyncio.create_task(result_worker.start())
+    background_tasks.extend([t1, t2])
+    yield
+
+    # Graceful shutdown
+    print("🛑 Argus Orchestrator shutting down...")
+    request_worker.stop()
+    result_worker.stop()
+    await asyncio.gather(*background_tasks, return_exceptions=True)
+
+
 app = FastAPI(
     title="Argus Orchestrator",
-    version="2.0"
+    version="2.0",
+    lifespan=lifespan
 )
 
-app.include_router(
-    health_router
-)
+app.include_router(health_router)
+
 
 @app.get("/")
 async def root():
