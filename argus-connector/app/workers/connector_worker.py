@@ -1,22 +1,27 @@
 import asyncio
-import json
+# import json
 import logging
 import signal
 from typing import Any, Dict
+
+
 import redis.exceptions
 
-from app.connectors.rss.parser import fetch_and_parse_rss
+from app.connectors.registry import get_connector
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.platform.redis import check_redis, redis_client
+from app.schemas.connector import ConnectorRequest
 
 logger = logging.getLogger(__name__)
 
 
-class RSSWorker:
-    """Continuous background worker that pulls crawl tasks from Redis Stream
-    'queue:connector:rss', fetches and parses feeds, publishes results to 'connector:rss:results',
-    and acknowledges tasks via xack."""
+class ConnectorWorker:
+    """
+    Continuous background worker that pulls connector tasks from Redis Stream,
+    executes the appropriate connector, publishes result to the result stream and acknowledge 
+    the task via XACK.
+    """
 
     def __init__(self, block_ms: int = 2000, batch_size: int = 5):
         self.stream_name = settings.connector_stream
@@ -52,7 +57,7 @@ class RSSWorker:
         self._is_running = True
         self._stop_event.clear()
 
-        logger.info("Initializing RSS Connector Worker....")
+        logger.info("Initializing Connector Worker....")
 
         # 1. Pre-flight health check
         redis_ok = await check_redis()
@@ -63,7 +68,7 @@ class RSSWorker:
         # 2. Ensure consumer group exists
         await self._setup_consumer_group()
         logger.info(
-            f"RSS Worker listening on stream '{self.stream_name}' "
+            f"Connector Worker listening on stream '{self.stream_name}' "
             f"[Group: {self.group_name}, Consumer: {self.consumer_name}]"
         )
 
@@ -86,29 +91,46 @@ class RSSWorker:
                         await self._process_task(message_id, raw_fields)
 
             except asyncio.CancelledError:
-                logger.info("RSS Worker received cancellation signal.")
+                logger.info("Connector Worker received cancellation signal.")
                 break
 
             except Exception as exc:
-                logger.exception(f"Unexpected error in RSS worker loop: {exc}")
+                logger.exception(f"Unexpected error in connector worker loop: {exc}")
                 await asyncio.sleep(5.0)
 
-        logger.info("RSS Worker loop has exited.")
+        logger.info("Connector Worker loop has exited.")
 
     async def _process_task(self, message_id: str, fields: Dict[str, Any]):
         """Processes a single task, scrapes the feed, and acknowledges Redis."""
         request_id = fields.get("request_id")
         url = fields.get("url")
+        platform = field.get("platform")
 
         if not request_id or not url:
-            logger.error(f"Message {message_id} is missing request_id or url: {fields}.")
-            await redis_client.xack(self.stream_name, self.group_name, message_id)
+            logger.error(
+                f"Message {message_id} is missing"
+                f"request_id, url or platform: {fields}."
+            )
+            await redis_client.xack(
+                self.stream_name, 
+                self.group_name, 
+                message_id
+            )
             return
 
-        logger.info(f"Processing task {message_id} -> request_id={request_id}, url={url}")
+        logger.info(
+            f"Processing task {message_id} ->"
+            f"request_id={request_id}, platform={platform}, url={url}")
 
         try:
-            crawl_result = await fetch_and_parse_rss(request_id, url)
+            request = ConnectorRequest(
+                request_id = request_id,
+                platform = platform,
+                source_url = url,
+            )
+            connector = get_connector(request.platform)
+
+            crawl_result = await connector.fetch(request)
 
             payload_json = crawl_result.model_dump_json()
             result_msg_id = await redis_client.xadd(
@@ -120,14 +142,18 @@ class RSSWorker:
                 f"(msg_id: {result_msg_id}, items: {crawl_result.items_count})"
             )
 
-            await redis_client.xack(self.stream_name, self.group_name, message_id)
+            await redis_client.xack(
+                self.stream_name, 
+                self.group_name, 
+                message_id
+            )
 
         except Exception as exc:
             logger.exception(f"Failed to process task {message_id}: {exc}")
 
     def stop(self):
         """Gracefully signals the worker loop to stop."""
-        logger.info("Stopping RSS worker gracefully....")
+        logger.info("Stopping Connector Worker gracefully....")
         self._is_running = False
         self._stop_event.set()
 
@@ -135,7 +161,7 @@ class RSSWorker:
 async def run_worker():
     """Entrypoint to setup logging, start worker, and handle graceful shutdown."""
     setup_logging()
-    worker = RSSWorker(block_ms=2000, batch_size=5)
+    worker = ConnectorWorker(block_ms=2000, batch_size=5)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -148,11 +174,11 @@ async def run_worker():
         await worker.start()
     except (KeyboardInterrupt, asyncio.CancelledError):
         worker.stop()
-        logger.info("RSS worker terminated.")
+        logger.info("Connector worker terminated.")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(run_worker())
     except KeyboardInterrupt:
-        print("\nRSS Worker terminated by user.")
+        print("\Connector Worker terminated by user.")

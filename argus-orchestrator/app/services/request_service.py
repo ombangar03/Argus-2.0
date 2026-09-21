@@ -7,16 +7,16 @@ from pydantic import ValidationError
 from app.core.config import settings
 from app.platform.mongodb import rss_requests
 from app.platform.redis import redis_client
-from app.schemas.request import RSSRequests
+from app.schemas.request import ConnectorRequest
 
 logger = logging.getLogger(__name__)
 
-async def dispatch_rss_request() -> Optional[RSSRequests]:
+async def dispatch_rss_request() -> Optional[ConnectorRequest]:
     """
     1. Atomically finds one pending request and marks it as 'processing'.
-    2. Validates against RSSRequest schema.
+    2. Validates against ConnectorRequest schema.
     3. Publishes it to the Redis connector stream.
-    4. Returns the dispatched RSSRequest or None if no pending work.
+    4. Returns the dispatched ConnectorRequest or None if no pending work.
     """
 
     # 1. Atomically claim one pending request
@@ -42,7 +42,7 @@ async def dispatch_rss_request() -> Optional[RSSRequests]:
 
     try:
         # 2. Build and validate the schema using Pydantic
-        request_obj = RSSRequests(
+        request_obj = ConnectorRequest(
             request_id=request_id,
             url=claimed_doc["url"],
             platform=claimed_doc.get("platform", "rss")
