@@ -19,7 +19,7 @@ class RSSItems(BaseModel):
 
     def compute_hash(self) -> str:
         raw = self.link.strip().lower()
-        return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+        return hashlib.sha256(raw.encode('utf-8')).hexdigest()  #generates the SHA-256 fingerprint.
 
 
     def model_post_init(self, __conetext):
