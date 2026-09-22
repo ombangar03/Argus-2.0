@@ -1,6 +1,10 @@
-from pydantic import BaseModel, Field 
+from typing import Any
+from pydantic import BaseModel, Field
 
 class ConnectorRequest(BaseModel):
     request_id: str
-    url: str
-    platform: str = Field(default="rss")
+    source: str
+    source_type: str
+    source_url: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    

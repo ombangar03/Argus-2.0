@@ -1,5 +1,5 @@
 import asyncio
-# import json
+import json
 import logging
 import signal
 from typing import Any, Dict
@@ -67,6 +67,7 @@ class ConnectorWorker:
 
         # 2. Ensure consumer group exists
         await self._setup_consumer_group()
+
         logger.info(
             f"Connector Worker listening on stream '{self.stream_name}' "
             f"[Group: {self.group_name}, Consumer: {self.consumer_name}]"
@@ -100,16 +101,38 @@ class ConnectorWorker:
 
         logger.info("Connector Worker loop has exited.")
 
+
     async def _process_task(self, message_id: str, fields: Dict[str, Any]):
         """Processes a single task, scrapes the feed, and acknowledges Redis."""
         request_id = fields.get("request_id")
-        url = fields.get("url")
-        platform = field.get("platform")
+        source = fields.get("source")
+        source_type = fields.get("source_type")
+        source_url = fields.get("source_url")
+        metadata_raw = fields.get("metadata", {})
 
-        if not request_id or not url:
+        try:
+            metadata = json.loads(metadata_raw)
+        
+        except (TypeError, json.JSONDecodeError):
+            logger.warning(
+                f"Invalid metadata for message {message_id}."
+                f"Using empty metadata."
+            )
+            metadata = {}
+        
+        except json.JSONDecodeError as exc:
+            logger.error(f"Failed to parse metadata: {metadata_raw}")
+            await redis_client.xack(
+                self.stream_name, 
+                self.group_name, 
+                message_id
+            )
+            return
+
+        if not request_id or not source or not source_type or not source_url:
             logger.error(
                 f"Message {message_id} is missing"
-                f"request_id, url or platform: {fields}."
+                f"request_id, source, source_type or source_url: {fields}."
             )
             await redis_client.xack(
                 self.stream_name, 
@@ -120,26 +143,35 @@ class ConnectorWorker:
 
         logger.info(
             f"Processing task {message_id} ->"
-            f"request_id={request_id}, platform={platform}, url={url}")
+            f"request_id={request_id}," 
+            f"source={source}," 
+            f"source_type={source_type},"
+            f"source_url={source_url}")
 
         try:
             request = ConnectorRequest(
                 request_id = request_id,
-                platform = platform,
-                source_url = url,
+                source= source,
+                source_type= source_type,
+                source_url= source_url,
+                metadata= metadata,
             )
-            connector = get_connector(request.platform)
+            connector = get_connector(request.source_type)
 
             crawl_result = await connector.fetch(request)
 
             payload_json = crawl_result.model_dump_json()
+
             result_msg_id = await redis_client.xadd(
-                self.result_stream, {"payload": payload_json}
+                self.result_stream, 
+                {"payload": payload_json}
             )
 
             logger.info(
-                f"Published result for {request_id} to '{self.result_stream}' "
-                f"(msg_id: {result_msg_id}, items: {crawl_result.items_count})"
+                f"Published result for {request_id} to "
+                f"'{self.result_stream}' "
+                f"(msg_id: {result_msg_id}, "
+                f"items: {crawl_result.items_count})"
             )
 
             await redis_client.xack(
@@ -150,6 +182,7 @@ class ConnectorWorker:
 
         except Exception as exc:
             logger.exception(f"Failed to process task {message_id}: {exc}")
+
 
     def stop(self):
         """Gracefully signals the worker loop to stop."""
@@ -164,6 +197,7 @@ async def run_worker():
     worker = ConnectorWorker(block_ms=2000, batch_size=5)
 
     loop = asyncio.get_running_loop()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, worker.stop)

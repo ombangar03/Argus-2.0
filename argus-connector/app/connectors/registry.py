@@ -6,10 +6,10 @@ CONNECTORS = {
 }
 
 
-def get_connector(platform: str):
-    connector = CONNECTORS.get(platform)
+def get_connector(source_type: str):
+    connector = CONNECTORS.get(source_type)
 
     if not connector:
-        raise ValueError(f"Unsupported connector: {platform}")
+        raise ValueError(f"Unsupported connector: {source_type}")
 
     return connector

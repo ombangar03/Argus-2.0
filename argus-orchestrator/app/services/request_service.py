@@ -1,4 +1,5 @@
 import logging 
+import json
 from datetime import datetime, timezone
 from typing import Optional
 from pymongo import ReturnDocument
@@ -11,7 +12,7 @@ from app.schemas.request import ConnectorRequest
 
 logger = logging.getLogger(__name__)
 
-async def dispatch_rss_request() -> Optional[ConnectorRequest]:
+async def dispatch_request() -> Optional[ConnectorRequest]:
     """
     1. Atomically finds one pending request and marks it as 'processing'.
     2. Validates against ConnectorRequest schema.
@@ -44,15 +45,26 @@ async def dispatch_rss_request() -> Optional[ConnectorRequest]:
         # 2. Build and validate the schema using Pydantic
         request_obj = ConnectorRequest(
             request_id=request_id,
-            url=claimed_doc["url"],
-            platform=claimed_doc.get("platform", "rss")
+            source=claimed_doc["source"],
+            source_type=claimed_doc["source_type"],
+            source_url=claimed_doc["url"],
+            metadata=claimed_doc.get("metadata", {}),
         ) 
 
         # 3. Publish to Redis stream
         # this is where the job leaves orchestrator. queue:connector:rss
+
+        dispatch_time = datetime.now(timezone.utc)
+
+        redis_payload = request_obj.model_dump()
+
+        redis_payload["metadata"] = json.dumps(
+            redis_payload["metadata"]
+        )
+
         stream_message_id = await redis_client.xadd(
             settings.connector_stream,
-            request_obj.model_dump()
+            redis_payload
         )
 
         logger.info(
@@ -67,6 +79,7 @@ async def dispatch_rss_request() -> Optional[ConnectorRequest]:
             {
                 "$set": {
                     "stream_message_id": stream_message_id,
+                    "dispatched_at": dispatch_time,
                     "updated_at": datetime.now(timezone.utc)
                 }
             }
@@ -118,7 +131,7 @@ if __name__ == "__main__":
     import asyncio
 
     async def _run():
-        result = await dispatch_rss_request()
+        result = await dispatch_request()
         if result:
             print(f"[SUCCESS] Dispatched: {result}")
         else:

@@ -36,7 +36,7 @@ from typing import Optional
 from app.core.logging import setup_logging
 from app.platform.mongodb import check_mongodb
 from app.platform.redis import check_redis
-from app.services.request_service import dispatch_rss_request
+from app.services.request_service import dispatch_request
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class RequestWorker:
         while self._is_running and not self._stop_event.is_set():
             try:
                 # Atomically claim and dispatch one request from MongoDB to Redis
-                dispatched = await dispatch_rss_request()
+                dispatched = await dispatch_request()
 
                 if dispatched:
                     logger.info(f"Successfully dispatched request: {dispatched.request_id}")

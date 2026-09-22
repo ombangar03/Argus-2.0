@@ -8,8 +8,14 @@ from app.platform.mongodb import rss_requests
 async def seed_request():
     request_doc = {
         "request_id":f"req_{uuid.uuid4().hex[:12]}",
-        "url": "https://agmetalminer.com/feed/",
-        "platform": "rss",
+        # "url": "https://agmetalminer.com/feed/",
+        # "url": "https://feeds.bbci.co.uk/news/rss.xml",
+        # "url": "https://example.com/not-a-real-feed",
+        "source": "indian_express",
+        "source_type": "rss",
+        "url": "https://indianexpress.com/section/business/commodities/feed/",
+        "metadata": {},
+        
         "status": "pending",
         "priority": "HIGH",
         "created_at": datetime.now(timezone.utc),

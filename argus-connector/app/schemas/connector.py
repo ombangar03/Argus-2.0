@@ -1,10 +1,11 @@
+from pydantic import Field
 from typing import Any, Optional
 from pydantic import BaseModel
 
 
 class ConnectorRequest(BaseModel):
     request_id: str
-    platform: str
-    source_url: Optional[str] = None
+    source: str
     source_type: Optional[str] = None
-    meta_data: dict[str, Any] = {}
+    source_url: Optional[str] = None    
+    metadata: dict[str, Any] = Field(default_factory=dict)
