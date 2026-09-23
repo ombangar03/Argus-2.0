@@ -9,17 +9,24 @@ class RSSItem(BaseModel):
     Represents a single parsed article from an RSS feed.
     This is what gets saved into MongoDB's 'rss_items' collection.
     """
-
+    item_hash: Optional[str] = None
     request_id: str
+    
+    source: str
+    source_type: str
+
     title: str
     link: str
+    description: Optional[str] = None
     summary: Optional[str] = None
     author: Optional[str] = None
+    
     published_at: Optional[datetime] = None
-    item_hash: Optional[str] = None
+    
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+
 
     def compute_hash(self) -> str:
         """
@@ -42,17 +49,17 @@ class CrawlResult(BaseModel):
     Represents the full result payload coming back from the connector via
     Redis Stream 'connector:rss:results'.
     """
-
+    
     request_id: str
-    status: str = "success"  # "success" or "failed"
-    items_count: int = 0
-    items: List[RSSItem] = []
+    status: str = "success"    # success or failure
+    item_count: int = 0
+    items: List[RSSItem] = Field(default_factory=list)
+    #error info
     error_message: Optional[str] = None
+
     fetched_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
-
-
 
 # if __name__ == "__main__":
 #     print("=======================================")

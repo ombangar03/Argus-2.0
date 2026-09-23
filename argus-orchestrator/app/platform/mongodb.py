@@ -20,8 +20,8 @@ database = mongo_client[
     settings.mongo_database
 ]
 
+news_queries = database["news_queries"]
 rss_requests = database["rss_requests"]
-
 rss_items = database["rss_items"]
 
 

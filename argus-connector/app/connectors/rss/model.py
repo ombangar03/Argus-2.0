@@ -1,20 +1,28 @@
-from pydantic._internal._signature import _HAS_DEFAULT_FACTORY
 import hashlib
 from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
-class RSSItems(BaseModel):
+class RSSItem(BaseModel):
     """Represents a single parsed article from an Rss Feed."""
+    item_hash: Optional[str] = None
+
     request_id: str
+    source: str
+    source_type: str
+
     title: str
     link: str
-    author: Optional[str] = None
-    published_at: Optional[datetime] = None
+    description: Optional[str] = None
     summary: Optional[str] = None
-    item_hash: Optional[str] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    author: Optional[str] = None
+    
+
+    published_at: Optional[datetime] = None
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
     def compute_hash(self) -> str:
@@ -22,7 +30,7 @@ class RSSItems(BaseModel):
         return hashlib.sha256(raw.encode('utf-8')).hexdigest()  #generates the SHA-256 fingerprint.
 
 
-    def model_post_init(self, __conetext):
+    def model_post_init(self, __context):
         if not self.item_hash and self.link:
             self.item_hash = self.compute_hash()
 
@@ -30,11 +38,14 @@ class RSSItems(BaseModel):
 class CrawlResult(BaseModel):
     """Full result payload published to 'connector:rss:results'"""
     request_id: str
-    status: str = "success"   #success or failed
-    items_count: int = 0
-    items: List[RSSItems] = []
+    status: str = "success"
+    item_count: int = 0
+    items: List[RSSItem] = Field(default_factory=list)
     error_message: Optional[str] = None
-    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    fetched_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
 
 # if __name__ == "__main__":
 #     print("\nTesting RSS items and Crawl Result--")

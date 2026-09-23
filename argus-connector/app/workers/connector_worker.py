@@ -171,7 +171,7 @@ class ConnectorWorker:
                 f"Published result for {request_id} to "
                 f"'{self.result_stream}' "
                 f"(msg_id: {result_msg_id}, "
-                f"items: {crawl_result.items_count})"
+                f"items: {crawl_result.item_count})"
             )
 
             await redis_client.xack(

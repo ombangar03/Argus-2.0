@@ -6,7 +6,7 @@ from typing import Optional
 import feedparser
 import httpx
 
-from app.connectors.rss.model import RSSItems, CrawlResult
+from app.connectors.rss.model import RSSItem, CrawlResult
 
 logger = logging.getLogger(__name__)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Argus/2.0"
@@ -24,7 +24,7 @@ def _parse_published_date(entry)-> Optional[datetime]:
     return None
 
 
-async def fetch_and_parse_rss(request_id: str, url: str) -> CrawlResult:
+async def fetch_and_parse_rss(request_id: str, source: str, source_type: str, url: str) -> CrawlResult:
     """Downloads an RSS feed Asynchronously, parses articles, and returns a 
     CrawlResult model.
     """
@@ -59,6 +59,13 @@ async def fetch_and_parse_rss(request_id: str, url: str) -> CrawlResult:
 
         items = []
         for entry in feed.entries:
+            logger.info(
+                "RSS Entry | title=%s | link=%s | published=%s",
+                getattr(entry, "title", None),
+        getattr(entry, "link", None),
+        getattr(entry, "published", None),
+            )
+            
             title = getattr(entry, "title", "").strip()
             link = getattr(entry, "link", "").strip()
 
@@ -73,11 +80,15 @@ async def fetch_and_parse_rss(request_id: str, url: str) -> CrawlResult:
             )
             published_at = _parse_published_date(entry)
 
-            item = RSSItems(
+            item = RSSItem(
                 request_id=request_id,
+                source=source,
+                source_type=source_type,
+                
                 title=title,
                 link=link,
                 summary=summary,
+
                 author=author,
                 published_at=published_at
             )
@@ -89,7 +100,7 @@ async def fetch_and_parse_rss(request_id: str, url: str) -> CrawlResult:
         return CrawlResult(
             request_id=request_id,
             status="success",
-            items_count=len(items),
+            item_count=len(items),
             items=items
         )
 

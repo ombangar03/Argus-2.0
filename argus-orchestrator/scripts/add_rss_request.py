@@ -1,3 +1,39 @@
+# import asyncio 
+# from datetime import datetime, timezone 
+# import uuid
+
+# from app.platform.mongodb import rss_requests 
+
+
+# async def seed_request():
+#     request_doc = {
+#         "request_id":f"req_{uuid.uuid4().hex[:12]}",
+#         # "url": "https://agmetalminer.com/feed/",
+#         # "url": "https://feeds.bbci.co.uk/news/rss.xml",
+#         # "url": "https://example.com/not-a-real-feed",
+#         "source": "indian_express",
+#         "source_type": "rss",
+#         "url": "https://indianexpress.com/section/business/commodities/feed/",
+#         "metadata": {},
+        
+#         "status": "pending",
+#         "priority": "HIGH",
+#         "created_at": datetime.now(timezone.utc),
+#         "updated_at": datetime.now(timezone.utc),
+#     }
+
+#     result = await rss_requests.insert_one(request_doc)
+#     print(f"Seeded pending request with _id: {result.inserted_id}")
+
+#     print(f"Request ID: {request_doc['request_id']}")
+#     print(f"URL: {request_doc['url']}")
+
+
+# if __name__ == "__main__":
+#     asyncio.run(seed_request())
+
+
+
 import asyncio 
 from datetime import datetime, timezone 
 import uuid
@@ -7,20 +43,34 @@ from app.platform.mongodb import rss_requests
 
 async def seed_request():
     request_doc = {
-        "request_id":f"req_{uuid.uuid4().hex[:12]}",
-        # "url": "https://agmetalminer.com/feed/",
-        # "url": "https://feeds.bbci.co.uk/news/rss.xml",
-        # "url": "https://example.com/not-a-real-feed",
-        "source": "indian_express",
-        "source_type": "rss",
-        "url": "https://indianexpress.com/section/business/commodities/feed/",
-        "metadata": {},
-        
-        "status": "pending",
-        "priority": "HIGH",
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-    }
+       "request_id": f"req_{uuid.uuid4().hex[:12]}",
+
+    "source": "bing",
+    "source_type": "rss",
+    "url": "https://www.bing.com/search?q=business+news&format=rss",
+
+    "metadata": {
+        "query": "business news",
+        "topic": "business"
+    },
+
+    "status": "pending",
+    "priority": "HIGH",
+
+    "created_at": datetime.now(timezone.utc),
+
+    "claimed_at": None,
+    "dispatched_at": None,
+    "completed_at": None,
+    "updated_at": None,
+
+    "stream_message_id": None,
+
+    "items_count": 0,
+    "new_items_count": 0,
+
+    "error_message": None
+}
 
     result = await rss_requests.insert_one(request_doc)
     print(f"Seeded pending request with _id: {result.inserted_id}")

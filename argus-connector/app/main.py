@@ -1,15 +1,15 @@
-from app.workers.rss_worker import RSSWorker
+from app.workers.connector_worker import ConnectorWorker
 import asyncio 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI 
 
 from app.core.logging import setup_logging
 from app.platform.redis import check_redis
-from app.workers.rss_worker import run_worker
+from app.workers.connector_worker import run_worker
 
 setup_logging()
 
-worker = RSSWorker(block_ms = 2000, batch_size=5)
+worker = ConnectorWorker(block_ms = 2000, batch_size=5)
 worker_task = None
 
 @asynccontextmanager
@@ -53,5 +53,4 @@ async def health():
         "status": "Healthy" if redis_ok else "unhealthy",
         "redis": "connected" if redis_ok else "disconnected"
     }
-
     
