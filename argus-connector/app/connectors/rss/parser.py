@@ -24,8 +24,14 @@ def _parse_published_date(entry)-> Optional[datetime]:
     return None
 
 
-async def fetch_and_parse_rss(request_id: str, source: str, source_type: str, url: str) -> CrawlResult:
-    """Downloads an RSS feed Asynchronously, parses articles, and returns a 
+async def fetch_and_parse_rss(
+    request_id: str, 
+    source: str, 
+    source_type: str, 
+    url: str
+) -> CrawlResult:
+    """
+    Downloads an RSS feed Asynchronously, parses articles, and returns a 
     CrawlResult model.
     """
 
@@ -51,6 +57,7 @@ async def fetch_and_parse_rss(request_id: str, source: str, source_type: str, ur
         )
             
             logger.warning(f"Feed parser error for {url}: {error_detail}")
+
             return CrawlResult(
                 request_id=request_id,
                 status="failed",
