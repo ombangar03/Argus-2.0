@@ -62,8 +62,8 @@ async def fetch_and_parse_rss(request_id: str, source: str, source_type: str, ur
             logger.info(
                 "RSS Entry | title=%s | link=%s | published=%s",
                 getattr(entry, "title", None),
-        getattr(entry, "link", None),
-        getattr(entry, "published", None),
+                getattr(entry, "link", None),
+                getattr(entry, "published", None),
             )
             
             title = getattr(entry, "title", "").strip()
