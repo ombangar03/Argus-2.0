@@ -1,4 +1,3 @@
-from _typeshed import structseq
 from datetime import datetime, timezone
 from typing import Any
 

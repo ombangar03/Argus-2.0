@@ -22,6 +22,10 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
    - [Inbound Schema: `app/schemas/result.py`](#file-11-appschemasresultpy)
    - [Inbound Service: `app/services/result_service.py`](#file-12-appservicesresult_servicepy)
    - [Inbound Worker: `app/workers/result_worker.py`](#file-13-appworkersresult_workerpy)
+   - [News Query Schema: `app/schemas/query.py`](#file-14-appschemasquerypy)
+   - [Bing URL Builder: `app/services/bing_service.py`](#file-15-appservicesbing_servicepy)
+   - [Seed News Queries: `scripts/seed_news_query.py`](#file-16-scriptsseed_news_querypy)
+   - [Bing Test Script: `app/test/test_bing.py`](#file-17-apptesttest_bingpy)
 5. [argus-connector: File-by-File Walkthrough](#5-argus-connector-file-by-file-walkthrough)
    - [Config: `app/core/config.py`](#connector-file-1-appcoreconfigpy)
    - [Logging: `app/core/logging.py`](#connector-file-2-appcoreloggingpy)
@@ -34,6 +38,7 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
    - [RSS Parser: `app/connectors/rss/parser.py`](#connector-file-9-appconnectorsrssparserpy)
    - [Generic Connector Worker: `app/workers/connector_worker.py`](#connector-file-10-appworkersconnector_workerpy)
    - [FastAPI Entrypoint: `app/main.py`](#connector-file-11-appmainpy)
+   - [Connector Test Suite: `app/test/`](#connector-file-12-apptest)
 6. [End-to-End Pipeline: How to Run the Full System](#6-end-to-end-pipeline-how-to-run-the-full-system)
 7. [Bugs Encountered & Fixes Applied](#7-bugs-encountered--fixes-applied)
 8. [Current Roadmap & Project Progress](#8-current-roadmap--project-progress)
@@ -162,19 +167,24 @@ argus-orchestrator/
 │   │   ├── config.py         # Pydantic Settings loader
 │   │   └── logging.py        # Centralized logger setup
 │   ├── platform/
-│   │   ├── mongodb.py        # Async Motor client, rss_requests & rss_items collections
+│   │   ├── mongodb.py        # Async Motor client, news_queries, rss_requests & rss_items collections
 │   │   └── redis.py          # Async Redis client with decode_responses=True
 │   ├── schemas/
+│   │   ├── query.py          # NewsQuery model for news_queries collection
 │   │   ├── request.py        # Generic ConnectorRequest outbound schema
 │   │   └── result.py         # Inbound schema (RSSItem and CrawlResult)
 │   ├── services/
+│   │   ├── bing_service.py   # Bing search RSS URL builder
 │   │   ├── request_service.py # Atomic claim, metadata serialization, and Redis dispatch
 │   │   └── result_service.py  # Article deduplication bulk upsert & job completion
+│   ├── test/
+│   │   └── test_bing.py      # Standalone verification test for Bing RSS search
 │   └── workers/
 │       ├── request_worker.py  # Continuous MongoDB polling dispatcher daemon
 │       └── result_worker.py   # Continuous Redis results consumer daemon
 └── scripts/
-    └── add_rss_request.py    # CLI tool to seed pending multi-source requests into MongoDB
+    ├── add_rss_request.py    # CLI tool to seed pending multi-source requests into MongoDB
+    └── seed_news_query.py    # Seed query dictionary for targeted Bing news searches
 ```
 
 ### `argus-connector/`
@@ -198,8 +208,11 @@ argus-connector/
 │   │   ├── registry.py       # Central dynamic connector registry & lookup
 │   │   └── rss/
 │   │       ├── connector.py  # RSSConnector implementing BaseConnector
-│   │       ├── model.py      # RSSItems & CrawlResult Pydantic models with SHA-256 fingerprinting
+│   │       ├── model.py      # RSSItem & CrawlResult Pydantic models with SHA-256 fingerprinting
 │   │       └── parser.py     # Async HTTP fetcher + feedparser article extractor
+│   ├── test/
+│   │   ├── test_bing_connector.py # Live test for RSSConnector with Bing query
+│   │   └── test_bing_parser.py    # Live test for fetch_and_parse_rss with Bing
 │   └── workers/
 │       └── connector_worker.py # Generic continuous Redis Stream consumer loop & dispatcher
 ```
@@ -265,6 +278,7 @@ from app.core.config import settings
 mongo_client = AsyncIOMotorClient(settings.mongo_url)
 database = mongo_client[settings.mongo_database]
 
+news_queries = database["news_queries"] # Target queries dictionary for news search
 rss_requests = database["rss_requests"]   # Job queue & status tracking
 rss_items = database["rss_items"]         # Parsed and stored articles
 
@@ -366,15 +380,27 @@ from app.platform.mongodb import rss_requests
 async def seed_request():
     request_doc = {
         "request_id": f"req_{uuid.uuid4().hex[:12]}",
-        "source": "indian_express",
+        "source": "bing",
         "source_type": "rss",
-        "url": "https://indianexpress.com/section/business/commodities/feed/",
-        "metadata": {},
+        "url": "https://www.bing.com/search?q=business+news&format=rss",
+        "metadata": {
+            "query": "business news",
+            "topic": "business"
+        },
         "status": "pending",
         "priority": "HIGH",
         "created_at": datetime.now(timezone.utc),
+        "claimed_at": None,
+        "dispatched_at": None,
+        "completed_at": None,
+        "updated_at": None,
+        "stream_message_id": None,
+        "items_count": 0,
+        "new_items_count": 0,
+        "error_message": None
     }
-    await rss_requests.insert_one(request_doc)
+    result = await rss_requests.insert_one(request_doc)
+    print(f"Seeded pending request with _id: {result.inserted_id}")
 ```
 
 ```bash
@@ -459,15 +485,26 @@ Instead of restricting requests to RSS feeds, `ConnectorRequest` represents any 
 ### File 11: `app/schemas/result.py`
 **Purpose:** Inbound Pydantic data models defining the payload received from the connector via Redis Stream `connector:rss:results`.
 
-- **`RSSItem`**: A single parsed article:
+- **`RSSItem`**: A single parsed article stored in `rss_items`:
   - `item_hash`: SHA-256 fingerprint of the normalized URL (`link.strip().lower()`).
-  - `model_post_init()`: Automatically computes `item_hash` if not already set.
+  - `request_id`: Originating job ID.
+  - `source`: Publisher/source identifier (e.g. `"bing"`, `"indian_express"`).
+  - `source_type`: Connector category (e.g. `"rss"`).
+  - `title`: Article title.
+  - `link`: Canonical URL.
+  - `description`: Optional raw description snippet.
+  - `summary`: Cleaned summary text.
+  - `author`: Article author.
+  - `published_at`: Timezone-aware UTC publication timestamp.
+  - `created_at`: Ingestion timestamp.
+  - `model_post_init()`: Automatically computes `item_hash` from `link` if not already set.
 - **`CrawlResult`**:
   - `request_id`: Correlation ID of the original request.
   - `status`: `"success"` or `"failed"`.
-  - `items_count`: Total number of items in the batch.
+  - `item_count`: Total number of items in the batch (standardized from `items_count`).
   - `items`: List of `RSSItem` objects.
-  - `error_message`: Error message if status is `"failed"`.
+  - `error_message`: Error details if status is `"failed"`.
+  - `fetched_at`: UTC timestamp of fetch completion.
 
 ---
 
@@ -502,6 +539,65 @@ Instead of restricting requests to RSS feeds, `ConnectorRequest` represents any 
 2. Reads messages using `xreadgroup` (`">"` for new undelivered messages).
 3. Parses JSON payloads (handles both `"payload"` and `"items"` string encodings).
 4. Only executes `xack()` **after** database persistence succeeds (guaranteeing at-least-once delivery).
+
+---
+
+### File 14: `app/schemas/query.py`
+**Purpose:** Pydantic model for persistent topic and keyword search queries stored in MongoDB's `news_queries` collection.
+
+```python
+from datetime import datetime, timezone
+from typing import Any
+from pydantic import BaseModel, Field
+
+class NewQuery(BaseModel):
+    source: str = "bing"
+    source_type: str = "rss"
+    topic: str
+    query: str
+    enabled: bool = True
+    priority: str = "HIGH"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+```
+
+---
+
+### File 15: `app/services/bing_service.py`
+**Purpose:** URL construction utility for Bing News RSS search queries. Encodes search phrases into valid RSS endpoints.
+
+```python
+from urllib.parse import quote_plus
+
+def build_bing_rss_url(query: str) -> str:
+    encoded_query = quote_plus(query.strip())
+    return f"https://www.bing.com/search?q={encoded_query}&format=rss"
+```
+
+---
+
+### File 16: `scripts/seed_news_query.py`
+**Purpose:** Database initialization script that seeds target news keywords into `news_queries` collection.
+
+**Key Mechanics:**
+- Creates a unique compound index on `("source", 1), ("query", 1)` to prevent duplicate search jobs.
+- Seeds default topics: `"business news"`, `"corporate news"`, `"company news"`, and `"corporate sector"`.
+- Uses `$setOnInsert` via `upsert=True` to maintain idempotency without overwriting existing query statuses.
+
+```bash
+# Run from argus-orchestrator:
+python scripts/seed_news_query.py
+```
+
+---
+
+### File 17: `app/test/test_bing.py`
+**Purpose:** Standalone verification script for Bing Search RSS feeds using `requests` and `feedparser`.
+
+- Generates query URL using `build_bing_rss_url("business news")`.
+- Fetches feed using realistic browser `User-Agent`.
+- Parses returned XML and prints article titles, links, and publication timestamps to verify feed availability.
 
 ---
 
@@ -613,6 +709,8 @@ class RSSConnector(BaseConnector):
     async def fetch(self, request):
         return await fetch_and_parse_rss(
             request_id=request.request_id,
+            source=request.source,
+            source_type=request.source_type,
             url=request.source_url,
         )
 ```
@@ -620,7 +718,7 @@ class RSSConnector(BaseConnector):
 ---
 
 ### Connector File 8: `app/connectors/rss/model.py`
-**Purpose:** Data models for RSS articles and batch results. Matches the Orchestrator's `app/schemas/result.py`.
+**Purpose:** Data models for RSS articles and batch results. Standardized to match the Orchestrator's `app/schemas/result.py`.
 
 ```python
 import hashlib
@@ -628,14 +726,17 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-class RSSItems(BaseModel):
+class RSSItem(BaseModel):
+    item_hash: Optional[str] = None
     request_id: str
+    source: str
+    source_type: str
     title: str
-    link: str                    # Must be 'link' (matches Orchestrator's RSSItem)
+    link: str                    # Standardized 'link' matches Orchestrator
+    description: Optional[str] = None
+    summary: Optional[str] = None
     author: Optional[str] = None
     published_at: Optional[datetime] = None
-    summary: Optional[str] = None
-    item_hash: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def compute_hash(self) -> str:
@@ -650,8 +751,8 @@ class RSSItems(BaseModel):
 class CrawlResult(BaseModel):
     request_id: str
     status: str = "success"
-    items_count: int = 0
-    items: List[RSSItems] = []
+    item_count: int = 0          # Standardized from items_count
+    items: List[RSSItem] = Field(default_factory=list)
     error_message: Optional[str] = None
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 ```
@@ -661,6 +762,8 @@ class CrawlResult(BaseModel):
 ### Connector File 9: `app/connectors/rss/parser.py`
 **Purpose:** Asynchronous HTTP fetcher and parser using `httpx.AsyncClient` and `feedparser`.
 
+- Signature: `fetch_and_parse_rss(request_id: str, source: str, source_type: str, url: str) -> CrawlResult`.
+- Propagates `source` and `source_type` down to each created `RSSItem` for end-to-end data provenance.
 - Uses a realistic `User-Agent` header to prevent bot blocking.
 - Converts publication timestamps (`published_parsed` / `updated_parsed`) to timezone-aware UTC datetimes.
 - Returns `CrawlResult(status="failed", error_message=...)` on network timeouts, HTTP errors, or unparseable feeds.
@@ -742,6 +845,22 @@ async def health():
 **Run with:**
 ```bash
 uvicorn app.main:app --port 8001 --reload
+```
+
+---
+
+### Connector File 12: `app/test/` (Verification Test Suite)
+**Purpose:** Standalone verification scripts to validate XML parser parsing and dynamic connector registry execution without spinning up full service daemons.
+
+- **`test_bing_parser.py`**:
+  Directly invokes `fetch_and_parse_rss()` against Bing News Search query RSS feeds. Verifies that HTTP client options (redirects, user-agent) successfully retrieve live search results and map them into valid `RSSItem` objects.
+- **`test_bing_connector.py`**:
+  Instantiates a `ConnectorRequest(source="bing", source_type="rss", ...)` and queries `get_connector("rss")`. Validates that dynamic connector dispatch properly resolves `RSSConnector`, calls `fetch()`, and returns standard `CrawlResult` models.
+
+```bash
+# Run tests from argus-connector:
+python app/test/test_bing_parser.py
+python app/test/test_bing_connector.py
 ```
 
 ---
@@ -839,6 +958,18 @@ python -m scripts.add_rss_request
 - **Symptom:** Renaming `rss_worker.py` to `connector_worker.py` caused `ModuleNotFoundError: No module named 'app.workers.rss_worker'` when starting the connector via Uvicorn.
 - **Fix:** Updated `app/main.py` to import `ConnectorWorker` from `app.workers.connector_worker`.
 
+### Bug 15: Cross-Service Model Name & Batch Count Discrepancies
+- **Symptom:** Connector schema used `RSSItems` (plural) and `items_count`, while Orchestrator expected `RSSItem` (singular) and `item_count`. Articles also lacked explicit `source`, `source_type`, and `description` tracking.
+- **Fix:** Aligned both microservices to `RSSItem` and `item_count`, and added `source`, `source_type`, and `description` to the Pydantic models in both repositories.
+
+### Bug 16: Missing Data Provenance in RSS Parser
+- **Symptom:** When `RSSConnector.fetch()` called `fetch_and_parse_rss()`, only `request_id` and `url` were passed. As a result, extracted articles had no record of which provider (`source`) or crawler method (`source_type`) discovered them.
+- **Fix:** Updated `fetch_and_parse_rss(request_id, source, source_type, url)` to accept source attributes and attach them to every created `RSSItem`.
+
+### Bug 17: Unwanted `_typeshed` Import in `app/schemas/query.py`
+- **Symptom:** IDE auto-imported `from _typeshed import structseq`, crashing with `ModuleNotFoundError: No module named '_typeshed'` when importing `NewQuery`.
+- **Fix:** Removed the unused `_typeshed` import from `app/schemas/query.py`.
+
 ---
 
 ## 8. Current Roadmap & Project Progress
@@ -859,13 +990,18 @@ python -m scripts.add_rss_request
               - app/schemas/connector.py (Generic ConnectorRequest schema)
               - app/workers/connector_worker.py (Generic ConnectorWorker daemon)
               - app/services/request_service.py (dispatch_request + JSON metadata)
+[x] Phase 15: Bing News RSS Engine & Custom Query Generation
+              - app/services/bing_service.py (build_bing_rss_url query generator)
+              - app/schemas/query.py (NewQuery schema for news search tracking)
+              - scripts/seed_news_query.py (News query dictionary seeder with unique index)
+              - app/test/test_bing.py (Direct HTTP + feedparser verification)
+              - argus-connector/app/test/ (Live test_bing_parser & test_bing_connector suites)
 ──────────────────────────────────────────────────────────────────────────────────────────
 [ ] Phase 10: NSE Announcements Connector (argus-connector/app/connectors/nse/)
 [ ] Phase 11: BSE Corporate Announcements Connector
 [ ] Phase 12: SEBI Orders & Circulars Connector (HTML scraper + PDF link extractor)
 [ ] Phase 13: SAT (Securities Appellate Tribunal) Orders Connector
 [ ] Phase 14: Stocktwits Social Feed Connector (REST API + JSON)
-[ ] Phase 15: Bing News RSS Connector (custom RSS feeds per ticker/keyword)
 [ ] Phase 16: REST API Endpoint (POST /api/feeds) to manage requests via HTTP
 [ ] Phase 17: Scheduler Integration (APScheduler for automatic periodic re-crawls)
 [ ] Phase 18: Unified Data Model (single 'market_intelligence_items' collection)
