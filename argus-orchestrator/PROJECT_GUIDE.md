@@ -671,6 +671,8 @@ result = await dispatch_news_queries()
 # returns: {"created": N, "skipped": M}
 ```
 
+---
+
 ## 5. argus-connector: File-by-File Walkthrough
 
 The connector is a **stateless, database-agnostic scraping service**. It communicates solely through Redis Streams — it never connects to MongoDB.
