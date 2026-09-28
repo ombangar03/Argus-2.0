@@ -66,7 +66,7 @@ async def seed_request():
 
     "stream_message_id": None,
 
-    "items_count": 0,
+    "item_count": 0,
     "new_items_count": 0,
 
     "error_message": None

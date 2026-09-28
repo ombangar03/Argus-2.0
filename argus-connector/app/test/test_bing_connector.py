@@ -40,7 +40,7 @@ async def main():
 
     print("\nResult:")
     print("Status:", result.status)
-    print("Items:", result.items_count)
+    print("Items:", result.item_count)
     print("Error:", result.error_message)
 
     for item in result.items[:3]:

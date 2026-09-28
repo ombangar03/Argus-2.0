@@ -7,7 +7,3 @@ def build_bing_rss_url(query: str) -> str:
         "https://www.bing.com/search?q="
         f"{encoded_query}&format=rss"
     )
-
-
-
-

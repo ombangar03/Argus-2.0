@@ -26,6 +26,7 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
    - [Bing URL Builder: `app/services/bing_service.py`](#file-15-appservicesbing_servicepy)
    - [Seed News Queries: `scripts/seed_news_query.py`](#file-16-scriptsseed_news_querypy)
    - [Bing Test Script: `app/test/test_bing.py`](#file-17-apptesttest_bingpy)
+   - [Query Dispatch Service: `app/services/query_dispatch_service.py`](#file-18-appservicesquery_dispatch_servicepy)
 5. [argus-connector: File-by-File Walkthrough](#5-argus-connector-file-by-file-walkthrough)
    - [Config: `app/core/config.py`](#connector-file-1-appcoreconfigpy)
    - [Logging: `app/core/logging.py`](#connector-file-2-appcoreloggingpy)
@@ -174,9 +175,10 @@ argus-orchestrator/
 │   │   ├── request.py        # Generic ConnectorRequest outbound schema
 │   │   └── result.py         # Inbound schema (RSSItem and CrawlResult)
 │   ├── services/
-│   │   ├── bing_service.py   # Bing search RSS URL builder
-│   │   ├── request_service.py # Atomic claim, metadata serialization, and Redis dispatch
-│   │   └── result_service.py  # Article deduplication bulk upsert & job completion
+│   │   ├── bing_service.py            # Bing search RSS URL builder
+│   │   ├── query_dispatch_service.py  # Reads news_queries; creates pending rss_requests
+│   │   ├── request_service.py         # Atomic claim, metadata serialization, Redis dispatch
+│   │   └── result_service.py          # Article dedup bulk upsert & job completion
 │   ├── test/
 │   │   └── test_bing.py      # Standalone verification test for Bing RSS search
 │   └── workers/
@@ -601,6 +603,74 @@ python scripts/seed_news_query.py
 
 ---
 
+### File 18: `app/services/query_dispatch_service.py`
+**Purpose:** Closes the query-to-request automation loop. Reads all enabled search queries from the `news_queries` collection, converts each query into a Bing RSS URL via `build_bing_rss_url()`, and inserts a ready-to-crawl `pending` document into `rss_requests` — without creating duplicates.
+
+#### Why It Exists
+Before this service, pending crawl tasks were created exclusively by manually running `scripts/add_rss_request.py` with a hardcoded URL. That meant a human had to be involved every time a new article batch was needed. `query_dispatch_service.py` automates this: it bridges the static query dictionary (seeded by `seed_news_query.py`) to the live crawl queue (`rss_requests`), enabling fully autonomous periodic re-crawling.
+
+#### What It Reads
+Queries the `news_queries` MongoDB collection for documents where `enabled: True`. Each document provides:
+- `query` — search phrase (e.g. `"business news"`)
+- `source` — platform identifier (e.g. `"bing"`)
+- `source_type` — connector type (e.g. `"rss"`)
+- `topic` — thematic label carried into request metadata
+- `priority` — scheduling priority (`HIGH`, `NORMAL`)
+
+#### How It Creates `rss_requests`
+For each enabled query, the service:
+1. Checks if an **active request** already exists (`status: pending | processing`) for the same `source` + `metadata.query` pair.
+2. If one exists, it **skips** the query (preventing double-dispatch).
+3. If none exists, it:
+   - Builds the target URL: `build_bing_rss_url(query)` → `https://www.bing.com/search?q=...&format=rss`
+   - Inserts a fully-formed request document into `rss_requests` with:
+     - `status: "pending"`, `request_id`, `source`, `source_type`, `url`, `metadata`, audit timestamps
+
+#### Duplicate Prevention Strategy
+The duplicate check uses a `find_one` query:
+```python
+{
+    "source": source,
+    "metadata.query": query,
+    "status": {"$in": ["pending", "processing"]}
+}
+```
+This ensures that even if the dispatcher is called multiple times in quick succession (e.g., by a scheduler or manual trigger), no duplicate crawl jobs are queued for the same active query. Only after a request reaches `completed` or `failed` will a new one be created.
+
+#### Architecture Position
+```text
+[MongoDB: news_queries]                   (seeded by seed_news_query.py)
+       │
+       │  (1. Find all enabled=True queries)
+       ▼
+[query_dispatch_service.py]
+       │  (2. Duplicate check: any pending|processing for this query?)
+       │  (3. build_bing_rss_url(query) → RSS endpoint)
+       │  (4. insert_one → rss_requests, status: "pending")
+       ▼
+[MongoDB: rss_requests]                   (picked up by request_worker.py)
+       │
+       │  (5. Atomic claim: status → "processing")
+       ▼
+[request_service.py] → Redis Stream: 'queue:connector:rss'
+```
+
+#### How It Connects to `request_worker.py`
+`query_dispatch_service.py` and `request_worker.py` are intentionally **decoupled**. The dispatch service only writes to `rss_requests`. The `RequestWorker` daemon independently polls `rss_requests` for `pending` documents every `poll_interval` seconds. This separation means:
+- The dispatch service can run on demand, on a schedule, or from an API endpoint.
+- The worker never needs to know *where* the pending task came from — it just claims and dispatches whatever is `pending`.
+
+#### How to Run
+```bash
+# Standalone — from argus-orchestrator directory:
+python -m app.services.query_dispatch_service
+
+# Or call programmatically from any async context:
+from app.services.query_dispatch_service import dispatch_news_queries
+result = await dispatch_news_queries()
+# returns: {"created": N, "skipped": M}
+```
+
 ## 5. argus-connector: File-by-File Walkthrough
 
 The connector is a **stateless, database-agnostic scraping service**. It communicates solely through Redis Streams — it never connects to MongoDB.
@@ -990,12 +1060,14 @@ python -m scripts.add_rss_request
               - app/schemas/connector.py (Generic ConnectorRequest schema)
               - app/workers/connector_worker.py (Generic ConnectorWorker daemon)
               - app/services/request_service.py (dispatch_request + JSON metadata)
-[x] Phase 15: Bing News RSS Engine & Custom Query Generation
+[x] Phase 15: Bing News RSS Engine, Custom Query Generation & Query-to-Request Automation
               - app/services/bing_service.py (build_bing_rss_url query generator)
               - app/schemas/query.py (NewQuery schema for news search tracking)
               - scripts/seed_news_query.py (News query dictionary seeder with unique index)
               - app/test/test_bing.py (Direct HTTP + feedparser verification)
               - argus-connector/app/test/ (Live test_bing_parser & test_bing_connector suites)
+              - app/services/query_dispatch_service.py (Automated query-to-request bridge;
+                reads news_queries, dedup-checks, creates pending rss_requests)
 ──────────────────────────────────────────────────────────────────────────────────────────
 [ ] Phase 10: NSE Announcements Connector (argus-connector/app/connectors/nse/)
 [ ] Phase 11: BSE Corporate Announcements Connector
