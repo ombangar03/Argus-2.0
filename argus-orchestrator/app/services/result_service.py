@@ -13,17 +13,50 @@ logger = logging.getLogger(__name__)
 async def ensure_indexes():
     """
     Creates necessary MongoDB indexes for high-performance querying and deduplication.
+    
     - rss_items: unique index on 'item_hash' (prevents duplicate articles).
-    - rss_items: index on 'request_id' (fast lookups by crawl task)
-    - rss_requests: index on 'request_id' (fast status updates).
+    - rss_items: index on 'request_id' (fast lookups by crawl task).
+    - rss_items: index on 'published_at' (fast time-based querying).
+    - rss_requests: unique index on 'request_id'.
+    - rss_requests: unique active_query_key for pending/processing requests.
     """
-    # 1. Deduplication index on articles
-    await rss_items.create_index("item_hash", unique=True)
+    
+    # 1. RSS articles Deduplication 
+    await rss_items.create_index(
+        [("item_hash", 1)], 
+        unique=True
+    )
+ 
+    # 2. Fast lookup indexes on articles
     await rss_items.create_index("request_id")
     await rss_items.create_index("published_at")
 
-    # 2. Fast lookup index on requests
-    await rss_requests.create_index("request_id", unique=True, sparse=True)
+    # 3. Unique request_id
+    await rss_requests.create_index(
+        "request_id", 
+        unique=True, 
+        sparse=True,
+    )
+
+    # 4. prevent duplicate active requests
+    await rss_requests.create_index(
+        [("active_query_key", 1)],
+        unique=True,
+        partialFilterExpression={
+            "$and": [
+                {
+                    "status": {
+                        "$in": ["pending", "processing"]
+                    }
+                },
+                {
+                    "active_query_key": {
+                        "$exists": True
+                    }
+                }
+            ]
+        },
+    )
 
     logger.info("MongoDB indexes verified successfully.")
 
@@ -86,6 +119,7 @@ async def process_crawl_result(
     2. Upsert articles into 'rss_items' without duplicates.
     3. Atomically updates 'rss_requests' records to 'completed' or 'failed'.
     """
+    
     # 1. Validate payload using CrawlResult schemas
     if isinstance(result_payload, dict):
         try:
@@ -161,54 +195,54 @@ async def process_crawl_result(
         }
 
 
-if __name__ == "__main__":
-    import asyncio
-    from app.core.logging import setup_logging
+# if __name__ == "__main__":
+#     import asyncio
+#     from app.core.logging import setup_logging
 
-    async def _test():
-        setup_logging()
-        print("--- Testing result_service.py ---")
+#     async def _test():
+#         setup_logging()
+#         print("--- Testing result_service.py ---")
 
-        # Ensure indexes exist
-        await ensure_indexes()
+#         # Ensure indexes exist
+#         await ensure_indexes()
 
-        # Create a mock success result with 2 items
-        mock_result = CrawlResult(
-            request_id="req_test_demo",
-            status="success",
-            items_count=2,
-            items=[
-                RSSItem(
-                    request_id="req_test_demo",
-                    title="Copper Markets Hit Historic High",
-                    link="https://example.com/copper-high-2026",
-                    summary="Copper rallied 4% in Asian trading hours.",
-                    author="Jane Doe"
-                ),
-                RSSItem(
-                    request_id="req_test_demo",
-                    title="Steel Tariffs Update",
-                    link="https://example.com/steel-tariffs-2026",
-                    summary="New tariff adjustments announced."
-                )
-            ]
-        )
+#         # Create a mock success result with 2 items
+#         mock_result = CrawlResult(
+#             request_id="req_test_demo",
+#             status="success",
+#             items_count=2,
+#             items=[
+#                 RSSItem(
+#                     request_id="req_test_demo",
+#                     title="Copper Markets Hit Historic High",
+#                     link="https://example.com/copper-high-2026",
+#                     summary="Copper rallied 4% in Asian trading hours.",
+#                     author="Jane Doe"
+#                 ),
+#                 RSSItem(
+#                     request_id="req_test_demo",
+#                     title="Steel Tariffs Update",
+#                     link="https://example.com/steel-tariffs-2026",
+#                     summary="New tariff adjustments announced."
+#                 )
+#             ]
+#         )
 
-        # Seed mock request in rss_requests so we can see it complete
-        await rss_requests.update_one(
-            {"request_id": "req_test_demo"},
-            {"$set": {"url": "https://example.com/feed", "status": "processing"}},
-            upsert=True
-        )
+#         # Seed mock request in rss_requests so we can see it complete
+#         await rss_requests.update_one(
+#             {"request_id": "req_test_demo"},
+#             {"$set": {"url": "https://example.com/feed", "status": "processing"}},
+#             upsert=True
+#         )
 
-        # Test processing the result
-        summary = await process_crawl_result(mock_result)
-        print(f"[SUCCESS] Processed result: {summary}")
+#         # Test processing the result
+#         summary = await process_crawl_result(mock_result)
+#         print(f"[SUCCESS] Processed result: {summary}")
 
-        # Test deduplication: re-run the exact same result!
-        print("\n--- Testing Deduplication (Re-running same batch) ---")
-        summary_dedup = await process_crawl_result(mock_result)
-        print(f"[DEDUPLICATION TEST] Processed result: {summary_dedup}")
-        print("Notice that items_inserted is 0 and items_duplicates is 2!")
+#         # Test deduplication: re-run the exact same result!
+#         print("\n--- Testing Deduplication (Re-running same batch) ---")
+#         summary_dedup = await process_crawl_result(mock_result)
+#         print(f"[DEDUPLICATION TEST] Processed result: {summary_dedup}")
+#         print("Notice that items_inserted is 0 and items_duplicates is 2!")
 
-    asyncio.run(_test())
+#     asyncio.run(_test())

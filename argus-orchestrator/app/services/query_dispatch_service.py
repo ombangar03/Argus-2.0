@@ -2,6 +2,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+from pymongo.errors import DuplicateKeyError
+
 from app.platform.mongodb import news_queries, rss_requests
 from app.services.bing_service import build_bing_rss_url
 
@@ -25,11 +27,15 @@ async def dispatch_news_queries():
         query = query_doc["query"]
         source = query_doc["source"]
         source_type = query_doc["source_type"]
+        
+        # normalize query for duplicate detection
+        normalized_query = query.strip().lower()
+
+        active_query_key = f"{source}:{source_type}:{normalized_query}"
 
         existing_request= await rss_requests.find_one(
             {
-                "source": source,
-                "metadata.query": query,
+                "active_query_key": active_query_key,
                 "status": {
                     "$in": ["pending", "processing"]
                 }
@@ -55,6 +61,7 @@ async def dispatch_news_queries():
 
             "source": source,
             "source_type": source_type,
+            "active_query_key": active_query_key,
             "url": rss_url,
 
             "metadata": {
@@ -79,16 +86,24 @@ async def dispatch_news_queries():
             "error_message": None,
         }
 
-        await rss_requests.insert_one(request_doc)
+        try:
+            await rss_requests.insert_one(request_doc)
 
-        created_count += 1
+            created_count += 1
 
-        logger.info(
-            "Created new request %s for query '%s' (URL: %s)",
-            request_doc["request_id"],
-            query,
-            rss_url,
-        )
+            logger.info(
+                "Created new request %s for query '%s' (URL: %s)",
+                request_doc["request_id"],
+                query,
+                rss_url,
+            )
+        except DuplicateKeyError:
+            skipped_count += 1
+            
+            logger.info(
+                "Skipping query '%s'. An active request already exists",
+                query,
+            )
     
     logger.info(
         "Query dispatch completed. Created=%s, Skipped=%s",

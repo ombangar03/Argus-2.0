@@ -1,8 +1,10 @@
 from app.connectors.rss.connector import RSSConnector
+from app.connectors.nse.connector import NSEConnector
 
 
 CONNECTORS = {
     "rss": RSSConnector(),
+    "nse_announcements": NSEConnector()
 }
 
 

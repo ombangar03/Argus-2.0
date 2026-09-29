@@ -36,6 +36,11 @@ class ConnectorWorker:
     async def _setup_consumer_group(self):
         """Creates the Redis Stream and consumer group if they do not already exist."""
         try:
+            logger.info(
+                f"Creating/checking consumer group "
+                f"'{self.group_name}' on stream '{self.stream_name}'..."
+            )
+            
             await redis_client.xgroup_create(
                 name=self.stream_name,
                 groupname=self.group_name,

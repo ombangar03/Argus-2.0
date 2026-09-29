@@ -21,8 +21,9 @@ class RSSItem(BaseModel):
     summary: Optional[str] = None
     author: Optional[str] = None
     
-    published_at: Optional[datetime] = None
+    subject: Optional[str] = None
     
+    published_at: Optional[datetime] = None
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
