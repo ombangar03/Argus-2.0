@@ -27,6 +27,7 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
    - [Seed News Queries: `scripts/seed_news_query.py`](#file-16-scriptsseed_news_querypy)
    - [Bing Test Script: `app/test/test_bing.py`](#file-17-apptesttest_bingpy)
    - [Query Dispatch Service: `app/services/query_dispatch_service.py`](#file-18-appservicesquery_dispatch_servicepy)
+   - [Request Idempotency Test: `app/test/test_request_idempotency.py`](#file-19-apptesttest_request_idempotencypy)
 5. [argus-connector: File-by-File Walkthrough](#5-argus-connector-file-by-file-walkthrough)
    - [Config: `app/core/config.py`](#connector-file-1-appcoreconfigpy)
    - [Logging: `app/core/logging.py`](#connector-file-2-appcoreloggingpy)
@@ -40,6 +41,11 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
    - [Generic Connector Worker: `app/workers/connector_worker.py`](#connector-file-10-appworkersconnector_workerpy)
    - [FastAPI Entrypoint: `app/main.py`](#connector-file-11-appmainpy)
    - [Connector Test Suite: `app/test/`](#connector-file-12-apptest)
+   - [NSE Announcements Models: `app/connectors/nse/models.py`](#connector-file-13-appconnectorsnsemodelspy)
+   - [NSE XML Parser: `app/connectors/nse/parser.py`](#connector-file-14-appconnectorsnseparserpy)
+   - [NSE HTTP Client: `app/connectors/nse/rss.py`](#connector-file-15-appconnectorsnsersspy)
+   - [NSE Connector: `app/connectors/nse/connector.py`](#connector-file-16-appconnectorsnseconnectorpy)
+   - [NSE Circulars API Client: `app/connectors/nse/circulars.py`](#connector-file-17-appconnectorsnsecircularspy)
 6. [End-to-End Pipeline: How to Run the Full System](#6-end-to-end-pipeline-how-to-run-the-full-system)
 7. [Bugs Encountered & Fixes Applied](#7-bugs-encountered--fixes-applied)
 8. [Current Roadmap & Project Progress](#8-current-roadmap--project-progress)
@@ -180,12 +186,13 @@ argus-orchestrator/
 │   │   ├── request_service.py         # Atomic claim, metadata serialization, Redis dispatch
 │   │   └── result_service.py          # Article dedup bulk upsert & job completion
 │   ├── test/
-│   │   └── test_bing.py      # Standalone verification test for Bing RSS search
+│   │   ├── test_bing.py                # Verification test for Bing RSS search
+│   │   └── test_request_idempotency.py # Concurrency race & partial unique index test
 │   └── workers/
 │       ├── request_worker.py  # Continuous MongoDB polling dispatcher daemon
 │       └── result_worker.py   # Continuous Redis results consumer daemon
 └── scripts/
-    ├── add_rss_request.py    # CLI tool to seed pending multi-source requests into MongoDB
+    ├── seed_rss_request.py   # CLI tool to seed pending multi-source requests into MongoDB
     └── seed_news_query.py    # Seed query dictionary for targeted Bing news searches
 ```
 
@@ -208,13 +215,30 @@ argus-connector/
 │   ├── connectors/
 │   │   ├── base.py           # BaseConnector abstract base class (ABC)
 │   │   ├── registry.py       # Central dynamic connector registry & lookup
-│   │   └── rss/
-│   │       ├── connector.py  # RSSConnector implementing BaseConnector
-│   │       ├── model.py      # RSSItem & CrawlResult Pydantic models with SHA-256 fingerprinting
-│   │       └── parser.py     # Async HTTP fetcher + feedparser article extractor
+│   │   ├── rss/
+│   │   │   ├── connector.py  # RSSConnector implementing BaseConnector
+│   │   │   ├── model.py      # RSSItem & CrawlResult Pydantic models with SHA-256 fingerprinting
+│   │   │   └── parser.py     # Async HTTP fetcher + feedparser article extractor
+│   │   └── nse/
+│   │       ├── __init__.py   # NSE package init
+│   │       ├── models.py     # NSEAnnouncement & NSECirculars Pydantic models
+│   │       ├── parser.py     # ElementTree XML parser (subject marker & datetime parsing)
+│   │       ├── rss.py        # Async HTTP client fetching NSE online announcements feed
+│   │       ├── circulars.py  # Async HTTP client fetching NSE circulars JSON API
+│   │       └── connector.py  # NSEConnector implementing BaseConnector (announcements & circulars)
 │   ├── test/
-│   │   ├── test_bing_connector.py # Live test for RSSConnector with Bing query
-│   │   └── test_bing_parser.py    # Live test for fetch_and_parse_rss with Bing
+│   │   ├── test_bing_connector.py # Verification test for RSSConnector with Bing query
+│   │   ├── test_bing_parser.py    # Verification test for fetch_and_parse_rss with Bing
+│   │   ├── test_nse_circular_api.py # Verification test for live NSE Circulars JSON endpoint
+│   │   ├── test_nse_circular_connector.py # Verification test for NSEConnector with source_type="nse_circular"
+│   │   ├── test_nse_circular_duplicates.py # Verification test analyzing duplicate circular numbers
+│   │   ├── test_nse_circular_worker.py # Verification test for end-to-end NSE circular worker dispatch
+│   │   ├── test_nse_connector.py  # Verification test for NSEConnector fetch
+│   │   ├── test_nse_parser.py     # Verification test for NSE XML parsing
+│   │   ├── test_nse_rss.py        # Verification test for live NSE feed download
+│   │   ├── test_nse_worker.py     # Verification test for end-to-end NSE worker flow
+│   │   ├── test_redis_group.py    # Redis consumer group creation verification
+│   │   └── test_registry.py       # Connector registry lookup test
 │   └── workers/
 │       └── connector_worker.py # Generic continuous Redis Stream consumer loop & dispatcher
 ```
@@ -490,13 +514,15 @@ Instead of restricting requests to RSS feeds, `ConnectorRequest` represents any 
 - **`RSSItem`**: A single parsed article stored in `rss_items`:
   - `item_hash`: SHA-256 fingerprint of the normalized URL (`link.strip().lower()`).
   - `request_id`: Originating job ID.
-  - `source`: Publisher/source identifier (e.g. `"bing"`, `"indian_express"`).
-  - `source_type`: Connector category (e.g. `"rss"`).
-  - `title`: Article title.
+  - `source`: Publisher/source identifier (e.g. `"bing"`, `"nse"`, `"indian_express"`).
+  - `source_type`: Connector category (e.g. `"rss"`, `"nse_announcements"`).
+  - `title`: Article or announcement title.
   - `link`: Canonical URL.
   - `description`: Optional raw description snippet.
   - `summary`: Cleaned summary text.
   - `author`: Article author.
+  - `subject`: Corporate announcement subject or category (e.g. `"OUTCOME OF BOARD MEETING"`).
+  - `metadata`: Optional dictionary holding connector-specific metadata attributes (e.g. `circular_number`, `display_number`, `circular_display_date`, `category`, `company`, `department`, `file_size`, `filename`, `file_department`, `file_extension` for `nse_circular`).
   - `published_at`: Timezone-aware UTC publication timestamp.
   - `created_at`: Ingestion timestamp.
   - `model_post_init()`: Automatically computes `item_hash` from `link` if not already set.
@@ -511,13 +537,27 @@ Instead of restricting requests to RSS feeds, `ConnectorRequest` represents any 
 ---
 
 ### File 12: `app/services/result_service.py`
-**Purpose:** Inbound business logic — saving articles to MongoDB with zero duplicates and updating request status.
+**Purpose:** Inbound business logic — saving articles to MongoDB with zero duplicates, maintaining strict indexing guarantees, and updating request status.
 
 **Key Mechanics:**
 1. **Index Assurance (`ensure_indexes`)**:
-   - `rss_items.item_hash`: Unique index for deduplication.
-   - `rss_items.request_id`: Index for looking up items by task.
-   - `rss_requests.request_id`: Unique index for status updates.
+   - `rss_items.item_hash`: Unique index `[("item_hash", 1)]` preventing duplicate articles across all crawl runs.
+   - `rss_items.request_id` & `rss_items.published_at`: Fast lookup and temporal filtering indexes.
+   - `rss_requests.request_id`: Unique sparse index for request lookups.
+   - `rss_requests.active_query_key`: Compound partial unique index:
+     ```python
+     await rss_requests.create_index(
+         [("active_query_key", 1)],
+         unique=True,
+         partialFilterExpression={
+             "$and": [
+                 {"status": {"$in": ["pending", "processing"]}},
+                 {"active_query_key": {"$exists": True}}
+             ]
+         }
+     )
+     ```
+     Guarantees that at most **one** active (`pending` or `processing`) request can exist for a given query key at any point in time, completely eliminating race-condition double dispatches.
 2. **Zero-Duplicate Bulk Upsert (`$setOnInsert`)**:
    ```python
    UpdateOne(
@@ -627,15 +667,18 @@ For each enabled query, the service:
      - `status: "pending"`, `request_id`, `source`, `source_type`, `url`, `metadata`, audit timestamps
 
 #### Duplicate Prevention Strategy
-The duplicate check uses a `find_one` query:
+The duplicate check uses normalized keys and dual-layer protection:
+1. **Application-Level Check:** Computes `active_query_key = f"{source}:{source_type}:{normalized_query}"` and queries `find_one({"active_query_key": active_query_key, "status": {"$in": ["pending", "processing"]}})`. If found, skips creation.
+2. **Database-Level Constraint:** If two concurrent dispatchers execute simultaneously, MongoDB's partial unique index on `active_query_key` raises a `DuplicateKeyError`. `query_dispatch_service.py` catches this exception and gracefully logs it as a skipped duplicate:
 ```python
-{
-    "source": source,
-    "metadata.query": query,
-    "status": {"$in": ["pending", "processing"]}
-}
+try:
+    await rss_requests.insert_one(request_doc)
+    created_count += 1
+except DuplicateKeyError:
+    skipped_count += 1
+    logger.info("Skipping query '%s'. An active request already exists", query)
 ```
-This ensures that even if the dispatcher is called multiple times in quick succession (e.g., by a scheduler or manual trigger), no duplicate crawl jobs are queued for the same active query. Only after a request reaches `completed` or `failed` will a new one be created.
+This guarantees that no duplicate crawl jobs are queued regardless of worker concurrency or execution overlap.
 
 #### Architecture Position
 ```text
@@ -670,6 +713,16 @@ from app.services.query_dispatch_service import dispatch_news_queries
 result = await dispatch_news_queries()
 # returns: {"created": N, "skipped": M}
 ```
+
+---
+
+### File 19: `app/test/test_request_idempotency.py`
+**Purpose:** Concurrency verification test demonstrating that duplicate active requests with identical `active_query_key` cannot be created concurrently.
+
+**Key Mechanics:**
+- Simulates two workers (`worker-A` and `worker-B`) racing via `asyncio.gather()` to insert a request for the exact same `active_query_key`.
+- Proves that exactly one worker succeeds (`CREATED`) and the other catches `DuplicateKeyError` (`SKIPPED`).
+- Validates that MongoDB's partial unique index strictly caps active requests for the key at `1`.
 
 ---
 
@@ -755,9 +808,11 @@ Every future connector (NSE, BSE, SEBI, Bing, Twitter/X) implements this exact `
 
 ```python
 from app.connectors.rss.connector import RSSConnector
+from app.connectors.nse.connector import NSEConnector
 
 CONNECTORS = {
     "rss": RSSConnector(),
+    "nse_announcements": NSEConnector(),
 }
 
 def get_connector(source_type: str):
@@ -808,6 +863,7 @@ class RSSItem(BaseModel):
     description: Optional[str] = None
     summary: Optional[str] = None
     author: Optional[str] = None
+    subject: Optional[str] = None # Corporate announcement subject / category
     published_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -924,16 +980,187 @@ uvicorn app.main:app --port 8001 --reload
 ### Connector File 12: `app/test/` (Verification Test Suite)
 **Purpose:** Standalone verification scripts to validate XML parser parsing and dynamic connector registry execution without spinning up full service daemons.
 
-- **`test_bing_parser.py`**:
-  Directly invokes `fetch_and_parse_rss()` against Bing News Search query RSS feeds. Verifies that HTTP client options (redirects, user-agent) successfully retrieve live search results and map them into valid `RSSItem` objects.
-- **`test_bing_connector.py`**:
-  Instantiates a `ConnectorRequest(source="bing", source_type="rss", ...)` and queries `get_connector("rss")`. Validates that dynamic connector dispatch properly resolves `RSSConnector`, calls `fetch()`, and returns standard `CrawlResult` models.
+> [!NOTE]
+> Verification scripts located inside `app/test/` are temporary developer smoke tests used during active connector creation. They can be run individually or eventually migrated to a standard root `tests/` directory with `pytest` mocks.
 
-```bash
-# Run tests from argus-connector:
-python app/test/test_bing_parser.py
-python app/test/test_bing_connector.py
+- **`test_bing_parser.py`**: Validates `fetch_and_parse_rss()` against live Bing News feeds.
+- **`test_bing_connector.py`**: Validates dynamic connector dispatch resolving `RSSConnector`.
+- **`test_nse_parser.py`**: Validates XML parsing, subject extraction (`|SUBJECT:`), and datetime parsing.
+- **`test_nse_rss.py`**: Validates direct HTTP download from `nsearchives.nseindia.com`.
+- **`test_nse_connector.py`**: Validates `NSEConnector.fetch()` mapping into standardized `CrawlResult`.
+- **`test_nse_worker.py`**: Validates worker dispatch for `source_type="nse_announcements"`.
+- **`test_nse_circular_api.py`**: Validates direct HTTP calls to the NSE Circulars REST endpoint (`https://www.nseindia.com/api/circulars`) with date parameters and extracts parsed circular records.
+- **`test_nse_circular_duplicates.py`**: Validates circular date parsing and checks for duplicate circular numbers and display numbers across multiple departments.
+- **`test_nse_circular_connector.py`**: Validates `NSEConnector.fetch()` mapping circulars into standardized `CrawlResult` and `RSSItem` with full metadata payload.
+- **`test_nse_circular_worker.py`**: Verifies end-to-end Redis Stream dispatch (`connector:requests` -> `connector_worker` -> `connector:rss:results`).
+- **`test_redis_group.py`**: Verifies Redis consumer group initialization.
+- **`test_registry.py`**: Verifies registry lookup for `"rss"`, `"nse_announcements"`, and `"nse_circular"`.
+
+---
+
+### Connector File 13: `app/connectors/nse/models.py`
+**Purpose:** Dedicated Pydantic models representing corporate announcements and official regulatory circulars from the National Stock Exchange of India (NSE).
+
+```python
+from datetime import datetime, timezone
+from typing import Optional 
+from pydantic import BaseModel, Field
+
+class NSEAnnouncement(BaseModel):
+    request_id: str
+    source: str
+    source_type: str
+    title: str
+    link: Optional[str] = None
+    description: Optional[str] = None
+    subject: Optional[str] = None
+    published_at: Optional[datetime] = None
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+
+class NSECirculars(BaseModel):
+    request_id: str
+    source: str
+    source_type: str
+    circular_date: Optional[datetime] = None
+    circular_display_date: Optional[str] = None
+    category: Optional[str] = None
+    company: Optional[str] = None
+    department: Optional[str] = None
+    display_number: Optional[str] = None
+    circular_number: Optional[str] = None
+    subject: Optional[str] = None
+    file_link: Optional[str] = None
+    file_size: Optional[str] = None
+    filename: Optional[str] = None
+    file_department: Optional[str] = None
+    file_extension: Optional[str] = None
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 ```
+
+---
+
+### Connector File 14: `app/connectors/nse/parser.py`
+**Purpose:** XML parser using standard library `xml.etree.ElementTree` with specialized extraction for NSE description metadata and publication dates.
+
+**Key Mechanics:**
+1. **Subject Marker Extraction (`parse_subject`)**:
+   NSE online announcements pack corporate subjects into the description string following a `|SUBJECT:` delimiter (e.g. `"... |SUBJECT: Financial Results"`). The parser safely splits and extracts this string:
+   ```python
+   def parse_subject(description: Optional[str]) -> Optional[str]:
+       if not description or "|SUBJECT:" not in description:
+           return None
+       return description.split("|SUBJECT:", 1)[1].strip() or None
+   ```
+2. **Custom Date Formatting (`parse_published_at`)**:
+   Parses NSE's specific timestamp format (`%d-%b-%Y %H:%M:%S`, e.g., `29-Sep-2026 17:45:00`) and converts it to a timezone-aware UTC datetime.
+3. **ElementTree Traversal (`parse_nse_rss`)**:
+   Iterates through each `<item>` node in the RSS feed and maps elements into clean `NSEAnnouncement` models.
+
+---
+
+### Connector File 15: `app/connectors/nse/rss.py`
+**Purpose:** Asynchronous HTTP client configured specifically to retrieve the official NSE online announcements feed.
+
+**Key Mechanics:**
+- **Endpoint:** `https://nsearchives.nseindia.com//content/RSS/Online_announcements.xml`
+- **Browser-Identical Headers:** Uses a Chrome Windows user-agent and XML accept headers to prevent HTTP 403 / anti-scraping blocks from NSE's archive servers.
+- **Timeout & Redirects:** 30.0s timeout with `follow_redirects=True`.
+- Returns parsed list of `NSEAnnouncement` objects via `parse_nse_rss()`.
+
+---
+
+### Connector File 16: `app/connectors/nse/connector.py`
+**Purpose:** Concrete implementation of `BaseConnector` for NSE Corporate Announcements and NSE Circulars.
+
+**Key Mechanics:**
+- Implements `async def fetch(self, request: ConnectorRequest) -> CrawlResult`.
+- Dispatches based on `request.source_type`:
+  - `"nse_announcements"`: Calls `_fetch_announcements()` -> `fetch_nse_rss()` -> `_announcement_to_rss_item()`.
+  - `"nse_circular"`: Calls `_fetch_circulars()` -> `fetch_nse_circulars()` -> `_circular_to_rss_item()`.
+- Standardizes both data streams into `RSSItem` objects:
+  - Preserves `subject` across both sources.
+  - Attaches rich circular metadata (`circular_number`, `display_number`, `circular_display_date`, `category`, `company`, `department`, `file_size`, `filename`, `file_department`, `file_extension`) in `RSSItem.metadata`.
+- Returns a standardized `CrawlResult(status="success", item_count=len(items), items=items)`.
+
+```python
+class NSEConnector(BaseConnector):
+
+    async def fetch(self, request: ConnectorRequest) -> CrawlResult:
+        if request.source_type == "nse_announcements":
+            return await self._fetch_announcements(request)
+        if request.source_type == "nse_circular":
+            return await self._fetch_circulars(request)
+        raise ValueError(f"Unsupported NSE source_type: {request.source_type}")
+
+    async def _fetch_announcements(self, request: ConnectorRequest) -> CrawlResult:
+        announcements = await fetch_nse_rss(request_id=request.request_id)
+        items = [self._announcement_to_rss_item(a) for a in announcements]
+        return CrawlResult(request_id=request.request_id, status="success", item_count=len(items), items=items)
+
+    async def _fetch_circulars(self, request: ConnectorRequest) -> CrawlResult:
+        from_date = request.metadata.get("from_date")
+        to_date = request.metadata.get("to_date")
+        if not from_date or not to_date:
+            raise ValueError("from_date and to_date are required for NSE circulars")
+        circulars = await fetch_nse_circulars(request_id=request.request_id, from_date=from_date, to_date=to_date)
+        items = [self._circular_to_rss_item(c) for c in circulars]
+        return CrawlResult(request_id=request.request_id, status="success", item_count=len(items), items=items)
+
+    @staticmethod
+    def _announcement_to_rss_item(announcement: NSEAnnouncement) -> RSSItem:
+        return RSSItem(
+            request_id=announcement.request_id,
+            source=announcement.source,
+            source_type=announcement.source_type,
+            title=announcement.title,
+            link=announcement.link or "",
+            description=announcement.description,
+            subject=announcement.subject,
+            published_at=announcement.published_at,
+        )
+
+    @staticmethod
+    def _circular_to_rss_item(circular: NSECirculars) -> RSSItem:
+        return RSSItem(
+            request_id=circular.request_id,
+            source=circular.source,
+            source_type=circular.source_type,
+            title=circular.subject or circular.display_number or "NSE Circular",
+            link=circular.file_link or "",
+            description=circular.subject,
+            subject=circular.subject,
+            published_at=circular.circular_date,
+            metadata={
+                "circular_number": circular.circular_number,
+                "display_number": circular.display_number,
+                "circular_display_date": circular.circular_display_date,
+                "category": circular.category,
+                "company": circular.company,
+                "department": circular.department,
+                "file_size": circular.file_size,
+                "filename": circular.filename,
+                "file_department": circular.file_department,
+                "file_extension": circular.file_extension,
+            },
+        )
+```
+
+---
+
+### Connector File 17: `app/connectors/nse/circulars.py`
+**Purpose:** Asynchronous HTTP client configured specifically to retrieve official NSE circulars via REST/JSON endpoint.
+
+**Key Mechanics:**
+- **Endpoint:** `https://www.nseindia.com/api/circulars` with `fromDate` and `toDate` query parameters (`DD-MM-YYYY`).
+- **Browser-Identical Headers:** Uses a Chrome Windows user-agent, JSON accept headers, and `Referer: https://www.nseindia.com/` to avoid HTTP 403 blocks from NSE's servers.
+- **Date Parsing (`_parse_circular_date`)**: Parses NSE's `%Y%m%d` date format (e.g., `20260930`) into a timezone-aware UTC `datetime`.
+- **Field Normalization (`_parse_circular`)**: Extracts and maps raw dictionary keys (`circNumber`, `circDisplayNo`, `circCategory`, `circCompany`, `circDepartment`, `circFileSize`, `circFilelink`, `circFilename`, `fileDept`, `fileExt`, `sub`) into structured `NSECirculars` models with `source_type="nse_circular"`.
+- **Timeout & Redirects:** 30.0s timeout with `follow_redirects=True`.
 
 ---
 
@@ -1042,6 +1269,22 @@ python -m scripts.add_rss_request
 - **Symptom:** IDE auto-imported `from _typeshed import structseq`, crashing with `ModuleNotFoundError: No module named '_typeshed'` when importing `NewQuery`.
 - **Fix:** Removed the unused `_typeshed` import from `app/schemas/query.py`.
 
+### Bug 18: NSE Announcements Feed Subject and Date Extraction
+- **Symptom:** NSE XML feed formats publish dates as `%d-%b-%Y %H:%M:%S` rather than standard RFC 822 / ISO 8601, and embeds the announcement subject inside the description prefixed by `|SUBJECT:`. Standard generic RSS parsers failed to extract the subject and threw parsing errors on dates.
+- **Fix:** Implemented custom ElementTree extraction in `argus-connector/app/connectors/nse/parser.py` with `parse_subject()` and `parse_published_at()` mapping into `NSEAnnouncement` and propagating `subject` into `RSSItem`.
+
+### Bug 19: Concurrent Query Dispatch Race Condition
+- **Symptom:** When running multiple workers or recurring dispatch sweeps, multiple identical `pending` requests could be inserted into `rss_requests` before earlier tasks were claimed or processed.
+- **Fix:** In `argus-orchestrator/app/services/result_service.py`, added a partial unique index on `active_query_key` for documents with `status: ["pending", "processing"]`. In `query_dispatch_service.py`, normalized queries and caught `DuplicateKeyError` to guarantee exactly-once dispatch idempotency.
+
+### Bug 20: Missing Trailing Comma & Attribute Mismatches in NSE Circulars Mapper
+- **Symptom:** Python parse error `Parse error: Expected ',', found name @[connector.py:L111]` caused by a missing comma after `published_at=circular.published_at` inside `_circular_to_rss_item()`. Additionally, `AttributeError` exceptions occurred when evaluating `circular.title`, `circular.link`, and `circular.published_at` because `NSECirculars` used `subject`, `file_link`, and `circular_date`.
+- **Fix:** Added the missing comma, mapped `circular.file_link` -> `link`, `circular.subject` -> `title`/`description`, `circular.circular_date` -> `published_at`, and extracted `circFileSize` from the NSE API into `circular.file_size` and `metadata["file_size"]`.
+
+### Bug 21: Canonical `source_type` Naming Inconsistency for NSE Circulars
+- **Symptom:** Inconsistent naming between plural `"nse_circulars"` and singular `"nse_circular"` caused worker tasks and tests to fail with `ValueError: Unsupported NSE source_type: nse_circular`.
+- **Fix:** Standardized the canonical connector `source_type` across `app/connectors/registry.py`, `NSEConnector.fetch()`, `app/connectors/nse/circulars.py`, and test suites strictly to singular `"nse_circular"`.
+
 ---
 
 ## 8. Current Roadmap & Project Progress
@@ -1062,6 +1305,15 @@ python -m scripts.add_rss_request
               - app/schemas/connector.py (Generic ConnectorRequest schema)
               - app/workers/connector_worker.py (Generic ConnectorWorker daemon)
               - app/services/request_service.py (dispatch_request + JSON metadata)
+[x] Phase 10: NSE Announcements & Circulars Connectors Pipeline
+              - argus-connector/app/connectors/nse/ (models, parser, rss, circulars, connector)
+              - argus-connector/app/connectors/registry.py (registered "nse_announcements" & "nse_circular")
+              - argus-connector/app/connectors/rss/model.py & orchestrator result.py (subject & metadata fields)
+              - argus-connector/app/test/ (test_nse_circular_api, test_nse_circular_duplicates, test_nse_circular_connector, test_nse_circular_worker)
+              - argus-orchestrator/app/schemas/result.py (metadata dictionary support on RSSItem)
+              - argus-orchestrator/app/services/result_service.py (partial unique index on active_query_key)
+              - argus-orchestrator/app/services/query_dispatch_service.py (DuplicateKeyError handling)
+              - argus-orchestrator/app/test/test_request_idempotency.py (concurrent race verification)
 [x] Phase 15: Bing News RSS Engine, Custom Query Generation & Query-to-Request Automation
               - app/services/bing_service.py (build_bing_rss_url query generator)
               - app/schemas/query.py (NewQuery schema for news search tracking)
@@ -1071,7 +1323,6 @@ python -m scripts.add_rss_request
               - app/services/query_dispatch_service.py (Automated query-to-request bridge;
                 reads news_queries, dedup-checks, creates pending rss_requests)
 ──────────────────────────────────────────────────────────────────────────────────────────
-[ ] Phase 10: NSE Announcements Connector (argus-connector/app/connectors/nse/)
 [ ] Phase 11: BSE Corporate Announcements Connector
 [ ] Phase 12: SEBI Orders & Circulars Connector (HTML scraper + PDF link extractor)
 [ ] Phase 13: SAT (Securities Appellate Tribunal) Orders Connector

@@ -20,6 +20,8 @@ class RSSItem(BaseModel):
     subject: Optional[str] = None
     published_at: Optional[datetime] = None
 
+    metadata: Optional[dict] = None
+    
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )

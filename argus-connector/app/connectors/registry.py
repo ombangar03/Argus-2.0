@@ -4,7 +4,8 @@ from app.connectors.nse.connector import NSEConnector
 
 CONNECTORS = {
     "rss": RSSConnector(),
-    "nse_announcements": NSEConnector()
+    "nse_announcements": NSEConnector(),
+    "nse_circular": NSEConnector(),
 }
 
 

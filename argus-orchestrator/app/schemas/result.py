@@ -1,3 +1,4 @@
+from sys import meta_path
 import hashlib
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -22,6 +23,7 @@ class RSSItem(BaseModel):
     author: Optional[str] = None
     
     subject: Optional[str] = None
+    metadata: Optional[dict] = None
     
     published_at: Optional[datetime] = None
     created_at: datetime = Field(
