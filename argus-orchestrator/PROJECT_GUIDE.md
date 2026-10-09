@@ -28,6 +28,12 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
    - [Bing Test Script: `app/test/test_bing.py`](#file-17-apptesttest_bingpy)
    - [Query Dispatch Service: `app/services/query_dispatch_service.py`](#file-18-appservicesquery_dispatch_servicepy)
    - [Request Idempotency Test: `app/test/test_request_idempotency.py`](#file-19-apptesttest_request_idempotencypy)
+   - [Scheduler Service: `app/services/scheduler_service.py`](#file-20-appservicesscheduler_servicepy)
+   - [Scheduler Worker: `app/workers/scheduler_worker.py`](#file-21-appworkersscheduler_workerpy)
+   - [Scheduler Service Test: `app/test/test_scheduler_service.py`](#file-22-apptesttest_scheduler_servicepy)
+   - [Scheduler Dispatch Test: `app/test/test_scheduler_dispatch.py`](#file-23-apptesttest_scheduler_dispatchpy)
+   - [Scheduler Tick Test: `app/test/test_scheduler_tick.py`](#file-24-apptesttest_scheduler_tickpy)
+   - [Scheduler Worker Test: `app/test/test_scheduler_worker.py`](#file-25-apptesttest_scheduler_workerpy)
 5. [argus-connector: File-by-File Walkthrough](#5-argus-connector-file-by-file-walkthrough)
    - [Config: `app/core/config.py`](#connector-file-1-appcoreconfigpy)
    - [Logging: `app/core/logging.py`](#connector-file-2-appcoreloggingpy)
@@ -38,7 +44,7 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
    - [RSS Connector: `app/connectors/rss/connector.py`](#connector-file-7-appconnectorsrssconnectorpy)
    - [RSS Data Model: `app/connectors/rss/model.py`](#connector-file-8-appconnectorsrssmodelpy)
    - [RSS Parser: `app/connectors/rss/parser.py`](#connector-file-9-appconnectorsrssparserpy)
-   - [Generic Connector Worker: `app/workers/connector_worker.py`](#connector-file-10-appworkersconnector_workerpy)
+   - [Generic Connector Worker & XAUTOCLAIM Recovery: `app/workers/connector_worker.py`](#connector-file-10-appworkersconnector_workerpy)
    - [FastAPI Entrypoint: `app/main.py`](#connector-file-11-appmainpy)
    - [Connector Test Suite: `app/test/`](#connector-file-12-apptest)
    - [NSE Announcements Models: `app/connectors/nse/models.py`](#connector-file-13-appconnectorsnsemodelspy)
@@ -49,6 +55,16 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
 6. [End-to-End Pipeline: How to Run the Full System](#6-end-to-end-pipeline-how-to-run-the-full-system)
 7. [Bugs Encountered & Fixes Applied](#7-bugs-encountered--fixes-applied)
 8. [Current Roadmap & Project Progress](#8-current-roadmap--project-progress)
+9. [Implementation Progress: Redis Scheduler and Dispatcher](#9-implementation-progress-redis-scheduler-and-dispatcher)
+   - [9.1 System Architecture & Boundary Definitions](#91-system-architecture--boundary-definitions)
+   - [9.2 Scheduler Design & Redis Hot-Path Data Structures](#92-scheduler-design--redis-hot-path-data-structures)
+   - [9.3 Atomic Dispatch Implementation via Lua](#93-atomic-dispatch-implementation-via-lua)
+   - [9.4 Dispatcher Tick & Idempotent Sweeps](#94-dispatcher-tick--idempotent-sweeps)
+   - [9.5 Background Scheduler Worker & Lifespan Integration](#95-background-scheduler-worker--lifespan-integration)
+   - [9.6 MongoDB Scheduled Units: Durable Configuration vs Hot Path](#96-mongodb-scheduled-units-durable-configuration-vs-hot-path)
+   - [9.7 Test Suite & Verification Matrix](#97-test-suite--verification-matrix)
+   - [9.8 Critical Architectural Limitations & Hardening Topics](#98-critical-architectural-limitations--hardening-topics)
+   - [9.9 Beginner-Friendly Component Breakdown, Flow Diagram & Status Matrix](#99-beginner-friendly-component-breakdown-flow-diagram--status-matrix)
 
 ---
 
@@ -167,14 +183,14 @@ argus-orchestrator/
 ├── requirements.txt          # Python dependencies (fastapi, motor, redis, pydantic-settings, uvicorn)
 ├── PROJECT_GUIDE.md          # THIS FILE: Full architecture & code walkthrough
 ├── app/
-│   ├── main.py               # FastAPI entrypoint with lifespan managing background workers
+│   ├── main.py               # FastAPI entrypoint with lifespan managing Request, Result & Scheduler workers
 │   ├── api/
 │   │   └── health.py         # /health and /ready probe endpoints
 │   ├── core/
-│   │   ├── config.py         # Pydantic Settings loader
+│   │   ├── config.py         # Pydantic Settings loader (including dispatch_tick_seconds)
 │   │   └── logging.py        # Centralized logger setup
 │   ├── platform/
-│   │   ├── mongodb.py        # Async Motor client, news_queries, rss_requests & rss_items collections
+│   │   ├── mongodb.py        # Async Motor client, collections: news_queries, rss_requests, rss_items, scheduled_units
 │   │   └── redis.py          # Async Redis client with decode_responses=True
 │   ├── schemas/
 │   │   ├── query.py          # NewsQuery model for news_queries collection
@@ -184,13 +200,19 @@ argus-orchestrator/
 │   │   ├── bing_service.py            # Bing search RSS URL builder
 │   │   ├── query_dispatch_service.py  # Reads news_queries; creates pending rss_requests
 │   │   ├── request_service.py         # Atomic claim, metadata serialization, Redis dispatch
-│   │   └── result_service.py          # Article dedup bulk upsert & job completion
+│   │   ├── result_service.py          # Article dedup bulk upsert & job completion
+│   │   └── scheduler_service.py       # Redis-based unit registration, candidate lookup & atomic Lua dispatch
 │   ├── test/
 │   │   ├── test_bing.py                # Verification test for Bing RSS search
-│   │   └── test_request_idempotency.py # Concurrency race & partial unique index test
+│   │   ├── test_request_idempotency.py # Concurrency race & partial unique index test
+│   │   ├── test_scheduler_service.py   # Unit registration, metadata storage & due query test
+│   │   ├── test_scheduler_dispatch.py  # Atomic dispatch, payload verification & schedule advance test
+│   │   ├── test_scheduler_tick.py      # Dispatcher tick sweep & single-run idempotency test
+│   │   └── test_scheduler_worker.py    # Background SchedulerWorker periodic ticks & graceful shutdown test
 │   └── workers/
-│       ├── request_worker.py  # Continuous MongoDB polling dispatcher daemon
-│       └── result_worker.py   # Continuous Redis results consumer daemon
+│       ├── request_worker.py   # Continuous MongoDB polling dispatcher daemon
+│       ├── result_worker.py    # Continuous Redis results consumer daemon
+│       └── scheduler_worker.py # Autonomous periodic scheduler dispatcher worker daemon
 └── scripts/
     ├── seed_rss_request.py   # CLI tool to seed pending multi-source requests into MongoDB
     └── seed_news_query.py    # Seed query dictionary for targeted Bing news searches
@@ -202,6 +224,7 @@ argus-connector/
 ├── .env                      # Redis URL, stream names, consumer group configuration
 ├── .env.example              # Template environment variables
 ├── requirements.txt          # Python dependencies (redis, httpx, feedparser, pydantic-settings, fastapi, uvicorn)
+├── test_xautoclaim.py        # Verification script for Redis XAUTOCLAIM stream recovery
 ├── app/
 │   ├── main.py               # FastAPI entrypoint with lifespan managing ConnectorWorker
 │   ├── core/
@@ -238,9 +261,10 @@ argus-connector/
 │   │   ├── test_nse_rss.py        # Verification test for live NSE feed download
 │   │   ├── test_nse_worker.py     # Verification test for end-to-end NSE worker flow
 │   │   ├── test_redis_group.py    # Redis consumer group creation verification
-│   │   └── test_registry.py       # Connector registry lookup test
+│   │   ├── test_registry.py       # Connector registry lookup test
+│   │   └── test_xpending.py       # Verification test inspecting Redis Stream Pending Entries List (PEL)
 │   └── workers/
-│       └── connector_worker.py # Generic continuous Redis Stream consumer loop & dispatcher
+│       └── connector_worker.py # Continuous consumer loop with XREADGROUP and XAUTOCLAIM stale PEL recovery
 ```
 
 ---
@@ -265,6 +289,8 @@ class Settings(BaseSettings):
     result_stream: str = "connector:rss:results"      # Stream we READ results from
     consumer_group: str = "orchestrator-results"       # Consumer group for result reading
     consumer_name: str = "orchestrator-1"              # Unique worker name
+
+    dispatch_tick_seconds: int = 5                     # Default cadence for scheduler worker tick
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -304,9 +330,10 @@ from app.core.config import settings
 mongo_client = AsyncIOMotorClient(settings.mongo_url)
 database = mongo_client[settings.mongo_database]
 
-news_queries = database["news_queries"] # Target queries dictionary for news search
-rss_requests = database["rss_requests"]   # Job queue & status tracking
-rss_items = database["rss_items"]         # Parsed and stored articles
+news_queries = database["news_queries"]       # Target queries dictionary for news search
+rss_requests = database["rss_requests"]       # Job queue & status tracking
+rss_items = database["rss_items"]             # Parsed and stored articles
+scheduled_units = database["scheduled_units"] # Scheduled scraping units (collection handle)
 
 async def check_mongodb():
     """Pings MongoDB admin to verify connection is alive."""
@@ -316,6 +343,9 @@ async def check_mongodb():
     except Exception:
         return False
 ```
+
+> [!NOTE]
+> `scheduled_units = database["scheduled_units"]` establishes application access to the MongoDB collection designated for persistent scheduled units. However, as verified in the code, a configuration-sync daemon or automated reconciliation loop between MongoDB and Redis is not yet implemented.
 
 ---
 
@@ -342,7 +372,7 @@ async def check_redis():
 ---
 
 ### File 5: `app/main.py`
-**Purpose:** FastAPI application entrypoint. Uses `lifespan` context manager to automatically start both background workers when Uvicorn boots, and cleanly stop them on shutdown.
+**Purpose:** FastAPI application entrypoint. Uses `lifespan` context manager to automatically start background workers (`RequestWorker`, `ResultWorker`, and `SchedulerWorker`) when Uvicorn boots, and cleanly stop them on shutdown.
 
 ```python
 import asyncio
@@ -352,27 +382,42 @@ from app.api.health import router as health_router
 from app.core.logging import setup_logging
 from app.workers.request_worker import RequestWorker
 from app.workers.result_worker import ResultWorker
+from app.workers.scheduler_worker import SchedulerWorker
 
 setup_logging()
 
 request_worker = RequestWorker(poll_interval=2.0)
 result_worker = ResultWorker(block_ms=2000, batch_size=10)
+scheduler_worker = SchedulerWorker()
+
 background_tasks = []
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 Argus Orchestrator starting up on Port 8000...")
-    t1 = asyncio.create_task(request_worker.start())  # Outbound dispatcher
-    t2 = asyncio.create_task(result_worker.start())   # Inbound ingestor
-    background_tasks.extend([t1, t2])
-    yield                                              # Server runs here
-    print("🛑 Argus Orchestrator shutting down...")
-    request_worker.stop()
-    result_worker.stop()
-    await asyncio.gather(*background_tasks, return_exceptions=True)
+    """Start and stop the Orchestrator background workers."""
+    print("Argus Orchestrator starting up on Port 8000...")
+    background_tasks = [
+        asyncio.create_task(request_worker.start(), name="request-worker"),
+        asyncio.create_task(result_worker.start(), name="result-worker"),
+        asyncio.create_task(scheduler_worker.run(), name="scheduler-worker"),
+    ]
+    try:
+        yield
+    finally:
+        print("Argus Orchestrator shutting down...")
+        request_worker.stop()
+        result_worker.stop()
+        await scheduler_worker.stop()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+        print("Argus Orchestrator shutdown complete.")
 
 app = FastAPI(title="Argus Orchestrator", version="2.0", lifespan=lifespan)
 app.include_router(health_router)
+
+@app.get("/")
+async def root():
+    return {"service": "argus-orchestrator", "status": "running"}
+```
 
 @app.get("/")
 async def root():
@@ -726,6 +771,96 @@ result = await dispatch_news_queries()
 
 ---
 
+### File 20: `app/services/scheduler_service.py`
+**Purpose:** Core scheduling service providing Redis-based scheduled unit registration, due candidate discovery, and atomic dispatch using a custom Lua script.
+
+**Key Functions & Redis Structures:**
+1. **Key Helpers:**
+   - `_due_key(platform, priority)`: Returns `scheduler:due:{platform}:{priority}` (Redis Sorted Set, where score = Unix timestamp).
+   - `_unit_key(unit_id)`: Returns `unit:{unit_id}` (Redis Hash holding metadata).
+   - `ACTIVE_KEYS_SET = "schedule:active_keys"`: Redis Set tracking active platform/priority combinations.
+2. **`register_scheduled_unit()`**:
+   - Validates inputs (`cadence_seconds > 0`, non-empty strings).
+   - Serializes `search_options` to JSON and normalizes metadata strings.
+   - Executes atomic pipeline:
+     - `pipe.zadd(due_key, {unit_id: next_run_at})`
+     - `pipe.hset(unit_key, mapping=metadata)`
+     - `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`
+3. **`get_due_unit_id()`**:
+   - Read-only candidate query: queries Redis Sorted Set with `zrangebyscore(due_key, min="-inf", max=current_time, num=limit)`.
+   - Explicitly does **not** claim, lock, or pop units.
+4. **`dispatch_due_unit()`**:
+   - Invokes Redis Lua script `_DISPATCH_DUE_UNIT_SCRIPT` with keys `[due_key, unit_key, stream_name]`.
+   - Lua script checks due timestamp, verifies metadata, drops disabled units, publishes job to `queue:connector:{platform}:{priority}` via `XADD`, advances schedule to `now + cadence` via `ZADD`, and returns `{1, stream_id, next_run_at, request_id}`.
+5. **`dispatch_due_units_once()`**:
+   - Sweeps active registry keys (or optional `platform_priority_keys` filter for isolated tests).
+   - Fetches due candidate unit IDs and executes `dispatch_due_unit()` for each.
+   - Returns count of successfully dispatched units.
+
+---
+
+### File 21: `app/workers/scheduler_worker.py`
+**Purpose:** Autonomous background daemon that runs dispatcher ticks on a recurring timer (`dispatch_tick_seconds`, default 5s).
+
+**Key Mechanics:**
+- **Initialization:** Reads `dispatch_tick_seconds` from `app.core.config.settings`.
+- **`run_once()`:** Invokes `dispatch_due_units_once()` and logs the number of dispatched units.
+- **`run()`:** Continuous async loop:
+  - Executes `run_once()`.
+  - Catches ordinary exceptions, logs `"Scheduler tick failed."`, and continues running without terminating the worker.
+  - Waits `tick_seconds` using `asyncio.wait_for(self._stop_event.wait(), timeout=self.tick_seconds)`.
+- **`stop()`:** Sets `_stop_event` to break the loop and ensure graceful application shutdown.
+- **FastAPI Integration:** Instantiated and supervised within `app/main.py` lifespan alongside `RequestWorker` and `ResultWorker`.
+
+---
+
+### File 22: `app/test/test_scheduler_service.py`
+**Purpose:** Unit test verifying scheduled unit registration, Redis Hash metadata storage, and time-based due lookups.
+
+**Verifications:**
+- Registers a unit scheduled 60 seconds into the future.
+- Confirms hash fields `term` and `cadence_seconds` match in Redis `unit:{unit_id}`.
+- Confirms unit is **not** returned when `now = future_time - 1`.
+- Confirms unit **is** returned when `now = future_time`.
+- Cleans up created test keys upon completion.
+
+---
+
+### File 23: `app/test/test_scheduler_dispatch.py`
+**Purpose:** Verification test confirming atomic dispatch via Lua script, stream publication, schedule advancement, and repeat dispatch prevention.
+
+**Verifications:**
+- Registers a due unit with `next_run_at = now - 1`.
+- Dispatches via `dispatch_due_unit()`, asserting success.
+- Verifies published message exists in `queue:connector:{platform}:{priority}` with accurate `term` and `unit_id`.
+- Verifies unit's score in sorted set advanced into the future (`next_run > now`).
+- Calls `dispatch_due_unit()` a second time at the exact same timestamp; confirms return is `None` and stream message count remains 1.
+
+---
+
+### File 24: `app/test/test_scheduler_tick.py`
+**Purpose:** Verification test confirming `dispatch_due_units_once()` executes full candidate sweep and preserves idempotency on repeated ticks.
+
+**Verifications:**
+- Registers a due unit and runs one dispatcher tick with `platform_priority_keys={active_key}`.
+- Confirms returned dispatch count is `1`.
+- Confirms job is placed in target connector stream.
+- Executes second tick immediately at identical `now` timestamp; asserts count is `0`.
+
+---
+
+### File 25: `app/test/test_scheduler_worker.py`
+**Purpose:** Verification test confirming `SchedulerWorker` loop lifecycle, periodic ticks, and clean graceful shutdown.
+
+**Verifications:**
+- Configures `SchedulerWorker(tick_seconds=0.05)`.
+- Temporarily patches `dispatch_due_units_once` with a test counter.
+- Test counter requests `await worker.stop()` upon reaching 3 ticks.
+- Runs `worker.run()` with `asyncio.wait_for(timeout=2)`.
+- Asserts exactly 3 ticks executed and worker exited cleanly.
+
+---
+
 ## 5. argus-connector: File-by-File Walkthrough
 
 The connector is a **stateless, database-agnostic scraping service**. It communicates solely through Redis Streams — it never connects to MongoDB.
@@ -899,7 +1034,7 @@ class CrawlResult(BaseModel):
 ---
 
 ### Connector File 10: `app/workers/connector_worker.py`
-**Purpose:** The generic continuous worker daemon that pulls tasks from Redis, safely parses parameters and metadata, resolves the connector via the registry, executes `fetch()`, publishes results, and acknowledges with `xack`.
+**Purpose:** The generic continuous worker daemon that pulls tasks from Redis, safely parses parameters and metadata, resolves the connector via the registry, executes `fetch()`, publishes results, acknowledges with `xack`, and recovers stale unacknowledged messages using `XAUTOCLAIM`.
 
 **Key Mechanics:**
 1. **Safe Metadata Deserialization:**
@@ -927,6 +1062,21 @@ class CrawlResult(BaseModel):
    ```
 4. **Publish & Acknowledge:**
    Publishes `crawl_result.model_dump_json()` to `result_stream` and calls `redis_client.xack()`.
+5. **Autonomous Stale Pending Message Recovery (`XAUTOCLAIM`):**
+   If a connector worker instance terminates or crashes while executing an external HTTP crawl, the pulled message remains in the Redis consumer group's **Pending Entries List (PEL)**.
+   The updated `ConnectorWorker` implements a dedicated background recovery task:
+   ```python
+   # Runs every recovery_interval (10s)
+   next_start_id, messages = await redis_client.xautoclaim(
+       name=self.stream_name,
+       groupname=self.group_name,
+       consumername=self.consumer_name,
+       min_idle_time=self.claim_idle_ms,  # 30,000 ms (30s)
+       start_id=claim_start_id,
+       count=self.batch_size,
+   )
+   ```
+   Any pending message that has been idle for more than `claim_idle_ms` (30 seconds) is transferred to this worker, re-crawled, published to results, and acknowledged via `xack`, preventing orphaned tasks from getting lost forever.
 
 ---
 
@@ -995,6 +1145,8 @@ uvicorn app.main:app --port 8001 --reload
 - **`test_nse_circular_worker.py`**: Verifies end-to-end Redis Stream dispatch (`connector:requests` -> `connector_worker` -> `connector:rss:results`).
 - **`test_redis_group.py`**: Verifies Redis consumer group initialization.
 - **`test_registry.py`**: Verifies registry lookup for `"rss"`, `"nse_announcements"`, and `"nse_circular"`.
+- **`test_xpending.py`**: Inspects Redis Stream Pending Entries List (`XPENDING`) to observe in-flight message state.
+- **`test_xautoclaim.py`**: Verifies `XAUTOCLAIM` recovery by seeding unacknowledged pending tasks and asserting automatic worker reclamation.
 
 ---
 
@@ -1328,6 +1480,571 @@ python -m scripts.add_rss_request
 [ ] Phase 13: SAT (Securities Appellate Tribunal) Orders Connector
 [ ] Phase 14: Stocktwits Social Feed Connector (REST API + JSON)
 [ ] Phase 16: REST API Endpoint (POST /api/feeds) to manage requests via HTTP
-[ ] Phase 17: Scheduler Integration (APScheduler for automatic periodic re-crawls)
+[x] Phase 17: Redis-Based Scheduler & Dispatcher Prototype (In Orchestrator)
+              - app/services/scheduler_service.py (register_scheduled_unit, get_due_unit_id, dispatch_due_unit Lua, dispatch_due_units_once)
+              - app/workers/scheduler_worker.py (SchedulerWorker periodic tick daemon)
+              - app/core/config.py (dispatch_tick_seconds = 5)
+              - app/platform/mongodb.py (scheduled_units collection handle)
+              - app/main.py (SchedulerWorker wired into FastAPI lifespan)
+              - app/test/ (test_scheduler_service, test_scheduler_dispatch, test_scheduler_tick, test_scheduler_worker - all 4 passing)
+              - PENDING: Connector stream contract alignment (queue:connector:rss vs queue:connector:rss:high)
+              - PENDING: MongoDB-to-Redis persistent configuration synchronizer & reconciler
 [ ] Phase 18: Unified Data Model (single 'market_intelligence_items' collection)
 ```
+
+---
+
+## 9. Implementation Progress: Redis Scheduler and Dispatcher
+
+This section documents the newly engineered Redis-based scheduling and dispatch subsystem in [`argus-orchestrator`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator), detailing its architectural boundaries, data structures, atomic execution semantics, test verification, known limitations, and implementation roadmap.
+
+---
+
+### 9.1 System Architecture & Boundary Definitions
+
+The Argus 2.0 architecture adheres to strict separation of concerns, decoupling operational persistence from real-time stream processing and scraping execution.
+
+```text
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   ARGUS ORCHESTRATOR                                   │
+│                                                                                        │
+│   ┌───────────────────────────┐                ┌───────────────────────────────────┐   │
+│   │   Operational Store       │                │       Hot-Path Scheduler          │   │
+│   │   [MongoDB: argus]        │                │       [Redis: Port 6379]          │   │
+│   │   - scheduled_units (Doc) │   (Sync loop   │   - schedule:active_keys (SET)    │   │
+│   │   - news_queries          │    [PENDING])  │   - scheduler:due:{p}:{pri} (ZSET)│   │
+│   │   - rss_requests          │ ─────────────> │   - unit:{unit_id} (HASH)         │   │
+│   │   - rss_items             │                └─────────────────┬─────────────────┘   │
+│   └─────────────▲─────────────┘                                  │                     │
+│                 │                                                │ dispatch_due_unit() │
+│                 │                                                ▼ (Atomic Lua Script) │
+│   ┌─────────────┴─────────────┐                ┌───────────────────────────────────┐   │
+│   │  ResultWorker (Consumer)  │                │     SchedulerWorker (Tick Loop)   │   │
+│   │  - reads results stream   │                │     - runs every 5s (default)     │   │
+│   │  - dedup upsert to Mongo  │                │     - XADD to connector stream    │   │
+│   │  - ACKs via xack          │                │     - ZADD advances next run time │   │
+│   └─────────────▲─────────────┘                └─────────────────┬─────────────────┘   │
+└─────────────────┼────────────────────────────────────────────────┼─────────────────────┘
+                  │                                                │
+                  │                                                │ Published jobs
+                  │                                                ▼
+   ┌──────────────┴─────────────────┐            ┌───────────────────────────────────┐
+   │ Stream: 'connector:rss:results'│            │ Stream: 'queue:connector:rss'     │
+   │ (Orchestrator Inbound Stream)  │            │ Stream: 'queue:connector:rss:high'│
+   └──────────────▲─────────────────┘            │ [Contract Integration Pending]   │
+                  │                              └─────────────────┬─────────────────┘
+                  │                                                │
+┌─────────────────┼────────────────────────────────────────────────┼─────────────────────┐
+│                 │               ARGUS CONNECTOR                  │                     │
+│                 │                                                ▼                     │
+│   ┌─────────────┴─────────────────┐            ┌───────────────────────────────────┐   │
+│   │   Result Publisher            │            │  ConnectorWorker (Pull & Scrape)  │   │
+│   │   - Serializes CrawlResult    │            │  - XREADGROUP & XAUTOCLAIM        │   │
+│   │   - XADD to results stream    │ <───────── │  - Dynamically resolves connector │   │
+│   │   - ACKs original job         │            │  - Async HTTP fetch & parse       │   │
+│   └───────────────────────────────┘            └───────────────────────────────────┘   │
+│                                                                                        │
+│   * Completely stateless: Has NO credentials or connection to MongoDB.                │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Microservice Responsibilities & Boundaries
+
+1. **[`argus-orchestrator`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator)**:
+   - **System Master & Single Writer**: The orchestrator is the sole authority managing business logic, job scheduling, deduplication guarantees, and permanent database writes to MongoDB.
+   - **Operational Daemons**:
+     - [`RequestWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/request_worker.py#L43-L122): Continuously polls MongoDB `rss_requests` for manual or seeded `pending` jobs, claims them atomically (`processing`), and dispatches them to Redis.
+     - [`ResultWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/result_worker.py#L26-L168): Listens on `connector:rss:results` using consumer group `orchestrator-results`, bulk-upserts extracted articles into MongoDB `rss_items` using `item_hash` deduplication, transitions request status to `completed` or `failed`, and issues `XACK`.
+     - [`SchedulerWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py#L10-L77): Periodic background daemon that triggers dispatcher ticks across active scheduling keys in Redis, executing atomic dispatches without querying MongoDB on the hot path.
+
+2. **[`argus-connector`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector)**:
+   - **Stateless Execution Worker**: Completely decoupled from MongoDB (it possesses no MongoDB credentials and includes only an empty platform stub). It reads crawl jobs exclusively from Redis Streams and pushes crawl results back to Redis Streams.
+   - [`ConnectorWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector/app/workers/connector_worker.py): Pulls jobs via `xreadgroup`, dynamically instantiates target connectors (e.g., `RSSConnector`, `NSEConnector`), handles non-blocking HTTP fetching, parses content, publishes structured `CrawlResult` payloads, and recovers stale in-flight messages via `xautoclaim`.
+
+3. **Redis Broker & Datastore**:
+   - Acts as the low-latency message broker and the high-performance scheduling state store.
+   - Hosts streams, consumer groups, pending entries lists (PEL), and hot-path scheduling keys (ZSET, Hash, Set).
+
+4. **MongoDB**:
+   - Durable system of record for operational data (`rss_requests`, `rss_items`, `news_queries`, and `scheduled_units`).
+   - Governed strictly by the **Single-Writer Principle**: All writes are performed by `argus-orchestrator`. Connectors never touch MongoDB.
+
+#### Stream Flow, Consumer Groups, Pending Entries, and Recovery
+
+- **Configured Prototype Streams**:
+  - `queue:connector:rss`: The primary inbound task stream consumed by `argus-connector`.
+  - `connector:rss:results`: The inbound results stream consumed by `argus-orchestrator`.
+- **Request IDs**:
+  - Uniquely correlate operations across both microservices.
+  - Manual/query requests: `req_{uuid}`.
+  - Scheduled requests: `scheduled:{unit_id}:{scheduled_for}`.
+- **Consumer Groups & Pending Entries List (PEL)**:
+  - Workers use Redis Consumer Groups (`xreadgroup`) with `mkstream=True`.
+  - When a message is delivered via `xreadgroup`, Redis moves it to the consumer group's PEL until explicitly acknowledged via `xack`.
+- **Acknowledgements & Safe Recovery**:
+  - In `ResultWorker`: `xack` is called **only after** MongoDB bulk upsert and status persistence succeed. If the orchestrator crashes mid-batch, the message remains in the PEL and is redelivered.
+  - In `ConnectorWorker`: `xack` is called **only after** the `CrawlResult` is published to the results stream.
+  - `XAUTOCLAIM` Recovery: In `ConnectorWorker`, a periodic recovery loop (`recovery_interval=10s`) runs `xautoclaim` with `claim_idle_ms=30000` (30 seconds). If any worker node crashes or loses network connectivity mid-crawl, orphaned pending messages are reassigned to healthy workers and processed to completion.
+
+---
+
+### 9.2 Scheduler Design & Redis Hot-Path Data Structures
+
+To support high-frequency scheduling without placing load on MongoDB, the scheduler implementation uses Redis data structures as its operational hot path.
+
+```text
+Redis Key Space:
+┌───────────────────────────────────┐
+│ Set: 'schedule:active_keys'       │ ──> Contains active '{platform}:{priority}' combinations
+└───────────────────────────────────┘
+┌───────────────────────────────────┐
+│ Hash: 'unit:{unit_id}'            │ ──> Contains unit metadata: term, org_id, search_options,
+└───────────────────────────────────┘     cadence_seconds, platform, priority, enabled
+┌───────────────────────────────────┐
+│ Sorted Set:                       │ ──> Member: unit_id
+│ 'scheduler:due:{platform}:{pri}'  │     Score:  Unix epoch timestamp (float seconds)
+└───────────────────────────────────┘
+┌───────────────────────────────────┐
+│ Target Stream:                    │ ──> Dispatched job payload
+│ 'queue:connector:{platform}:{pri}'│
+└───────────────────────────────────┘
+```
+
+#### Redis Data Structures
+
+1. **`schedule:active_keys`** (Redis Set):
+   - Registry of all active platform/priority combinations requiring polling sweeps (e.g., `rss:high`, `nse:normal`).
+   - Enables the dispatcher tick to discover which sorted sets have scheduled tasks without scanning the entire Redis keyspace.
+
+2. **`scheduler:due:{platform}:{priority}`** (Redis Sorted Set - ZSET):
+   - Stores unit IDs as members, scored by their next scheduled execution timestamp (Unix epoch seconds).
+   - Conceptually specified as `schedule:due:{platform}:{priority}`; implemented in code via [`_due_key()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L16-L22) as `scheduler:due:{platform}:{priority}`.
+   - Allows fast range queries to find overdue units whose score is $\le \text{now}$.
+
+3. **`unit:{unit_id}`** (Redis Hash):
+   - Stores configuration and metadata for a specific unit:
+     - `term`: The search term or target entity (e.g., `"copper prices"`).
+     - `platform`: Target connector platform (e.g., `"rss"`).
+     - `priority`: Scheduling priority (e.g., `"high"`).
+     - `cadence_seconds`: Execution interval in seconds (e.g., `"300"`).
+     - `org_id`: Tenant or organization identifier.
+     - `search_options`: JSON-serialized dictionary of search parameters.
+     - `enabled`: String `"true"` or `"false"`.
+
+4. **`queue:connector:{platform}:{priority}`** (Redis Stream):
+   - Target stream pattern used by the dispatcher to publish execution tasks.
+   - For example: `queue:connector:rss:high`.
+
+#### Hot-Path Service Methods
+
+- **[`register_scheduled_unit()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L43-L90)**:
+  - **Validation**: Enforces `cadence_seconds > 0`, non-empty `unit_id`, `platform`, and `priority`.
+  - **Type Normalization**: Converts `next_run_at` (`datetime`, `int`, or `float`) to Unix epoch float seconds via `_timestamp()`.
+  - **Atomic Pipeline Execution**: Executes a Redis transaction pipeline (`MULTI/EXEC`) containing:
+    ```python
+    pipe.zadd(due_key, {unit_id: _timestamp(next_run_at)})
+    pipe.hset(unit_key, mapping=metadata)
+    pipe.sadd(ACTIVE_KEYS_SET, unit_key)  # Note: see Discrepancy Register in 9.9
+    await pipe.execute()
+    ```
+
+- **[`get_due_unit_id()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L92-L116)**:
+  - Queries candidates whose execution timestamp has arrived:
+    ```python
+    return await redis_client.zrangebyscore(
+        due_key, min="-inf", max=current_time, start=0, num=limit
+    )
+    ```
+  - **Read-Only Candidate Lookup**: This function **only reads candidate unit IDs**. It does not pop, claim, lock, or modify them in Redis. True claiming and dispatch occur exclusively inside the atomic Lua script.
+
+---
+
+### 9.3 Atomic Dispatch Implementation via Lua
+
+When a unit becomes due, publishing the job to Redis Streams and advancing its next execution timestamp in the sorted set must happen **atomically**. If these operations were executed via separate network round-trips:
+1. Worker A could read unit `U1` as due.
+2. Worker B could read unit `U1` as due before Worker A updates the score.
+3. Both workers would publish duplicate crawl jobs to the connector stream.
+
+To eliminate this race condition, [`dispatch_due_unit()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L184-L220) executes all checks, publishing, and score updates inside a single Redis Lua script: [`_DISPATCH_DUE_UNIT_SCRIPT`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L119-L181).
+
+#### Lua Script Step-by-Step Execution Flow
+
+```text
+KEYS[1]: due_key (scheduler:due:{platform}:{priority})
+KEYS[2]: unit_key (unit:{unit_id})
+KEYS[3]: stream_name (queue:connector:{platform}:{priority})
+ARGV[1]: unit_id
+ARGV[2]: now (current Unix epoch timestamp)
+```
+
+1. **Check Scheduled Status**:
+   `redis.call("ZSCORE", KEYS[1], unit_id)`
+   If `due_score` is nil, the unit is not in the schedule; return `{0, "not_scheduled"}`.
+2. **Check Due Condition**:
+   `if tonumber(due_score) > now then return {0, "not_due"} end`
+   Ensures the unit is not dispatched prematurely.
+3. **Read Unit Metadata**:
+   `redis.call("HGET", KEYS[2], ...)`
+   Retrieves `term`, `platform`, `priority`, `org_id`, `search_options`, `cadence_seconds`, and `enabled`.
+4. **Remove Disabled Units**:
+   If `enabled == "false"`, the script removes the unit from the due schedule (`redis.call("ZREM", KEYS[1], unit_id)`) and returns `{0, "disabled"}`.
+5. **Validate Required Metadata**:
+   Verifies that `term`, `platform`, `priority`, and `cadence > 0` exist. If corrupt, halts with `redis.error_reply("Invalid scheduled unit metadata")`.
+6. **Publish Job to Connector Stream via `XADD`**:
+   Constructs `scheduled_for = tostring(due_score)` and `request_id = "scheduled:" .. unit_id .. ":" .. scheduled_for`.
+   Dispatches the job payload to `KEYS[3]`:
+   ```lua
+   local stream_id = redis.call(
+       "XADD", KEYS[3], "*",
+       "request_id", request_id,
+       "unit_id", unit_id,
+       "term", term,
+       "platform", platform,
+       "priority", priority,
+       "org_id", org_id,
+       "search_options", search_options,
+       "scheduled_for", scheduled_for,
+       "dispatched_at", tostring(now),
+       "cadence_seconds", tostring(cadence)
+   )
+   ```
+7. **Advance Next Run Timestamp via `ZADD`**:
+   `local next_run_at = now + cadence`
+   `redis.call("ZADD", KEYS[1], next_run_at, unit_id)`
+   Moves the score forward in the sorted set, removing it from candidate lookups until the cadence has elapsed.
+8. **Return Dispatch Receipt**:
+   Returns `{1, stream_id, tostring(next_run_at), request_id}`.
+
+#### Atomic Rationale & Delivery Semantics Nuance
+
+- **Why Lua?** Redis executes Lua scripts as a single atomic command on its main thread. No other Redis operation can interleave between reading the score, publishing the `XADD`, and updating the `ZADD`. This eliminates the dispatch-and-reschedule race window.
+- **Precision on Delivery Semantics**: This atomicity guarantees that Redis will not double-dispatch the same schedule tick. **However, this does not guarantee end-to-end exactly-once connector processing.** If a downstream connector crashes mid-crawl, network packets drop, or retries are triggered downstream, duplicates can still occur at the connector tier. Deduplication at the persistence tier (`rss_items.item_hash`) remains essential.
+
+#### Outbound Job Payload Fields
+
+The payload fields actually written to the connector stream by the Lua script are:
+
+| Field | Description | Example Value |
+| :--- | :--- | :--- |
+| `request_id` | Deterministic job ID formatted as `scheduled:{unit_id}:{scheduled_for}` | `scheduled:unit-101:1775735160.0` |
+| `unit_id` | Identifier of the scheduled unit | `unit-101` |
+| `term` | The search phrase or query | `copper prices` |
+| `platform` | Target platform | `rss` |
+| `priority` | Priority tier | `high` |
+| `org_id` | Organization or tenant ID | `org-argus` |
+| `search_options` | JSON-encoded dictionary of search parameters | `{"language": "en"}` |
+| `scheduled_for` | The score at which the unit became due | `1775735160.0` |
+| `dispatched_at` | Current Unix epoch timestamp | `1775735161.45` |
+| `cadence_seconds` | Recurrence interval in seconds | `300` |
+
+---
+
+### 9.4 Dispatcher Tick & Idempotent Sweeps
+
+The dispatcher tick is implemented by [`dispatch_due_units_once()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L222-L280):
+
+```python
+async def dispatch_due_units_once(
+    limit_per_key: int = 100,
+    now: float | None = None,
+    platform_priority_keys: set[str] | None = None,
+) -> int:
+```
+
+#### Sweep Mechanics
+
+1. **Target Combination Discovery**:
+   - By default, reads `schedule:active_keys` from Redis.
+   - Accepts an optional `platform_priority_keys` argument (a set of strings such as `{"rss:high"}`), allowing isolated integration tests to test specific queues without sweeping unrelated production schedules.
+2. **Iteration & Parsing**:
+   - Iterates through keys, splitting on `:` to extract `platform` and `priority`.
+   - Logs and skips malformed keys safely.
+3. **Candidate Fetching**:
+   - Calls `get_due_unit_id(platform, priority, limit=limit_per_key, now=current_time)`.
+4. **Atomic Dispatch**:
+   - For each due unit ID, calls `dispatch_due_unit()`.
+   - Increments `dispatched_count` for each successful dispatch (`result is not None`).
+   - Logs the unit ID, target stream name, and `next_run_at`.
+5. **Idempotency Guarantee**:
+   - Because `dispatch_due_unit()` advances the sorted set score to `now + cadence`, a subsequent tick executed at the exact same timestamp will find 0 due units. The score has moved into the future, guaranteeing that repeated ticks are idempotent.
+
+---
+
+### 9.5 Background Scheduler Worker & Lifespan Integration
+
+#### [`SchedulerWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py) Implementation
+
+Located in `app/workers/scheduler_worker.py`:
+- **Configuration**: Reads `settings.dispatch_tick_seconds` (defaulting to `5` seconds).
+- **`run_once()`**: Triggers one tick via `dispatch_due_units_once()` and logs the outcome.
+- **`run()`**: Autonomous async loop:
+  - Runs while `not self._stop_event.is_set()`.
+  - Wraps `await self.run_once()` in a `try/except Exception` block: ordinary tick exceptions are logged (`"Scheduler tick failed."`), and the loop continues rather than crashing.
+  - Waits between ticks using `asyncio.wait_for(self._stop_event.wait(), timeout=self.tick_seconds)`.
+- **`stop()`**: Asynchronously sets `self._stop_event`, cleanly interrupting idle waits.
+
+#### FastAPI Lifespan Integration in [`app/main.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/main.py)
+
+The integration is verified in the active codebase:
+```python
+# app/main.py
+request_worker = RequestWorker(poll_interval=2.0)
+result_worker = ResultWorker(block_ms=2000, batch_size=10)
+scheduler_worker = SchedulerWorker()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    background_tasks = [
+        asyncio.create_task(request_worker.start(), name="request-worker"),
+        asyncio.create_task(result_worker.start(), name="result-worker"),
+        asyncio.create_task(scheduler_worker.run(), name="scheduler-worker"),
+    ]
+    try:
+        yield
+    finally:
+        request_worker.stop()
+        result_worker.stop()
+        await scheduler_worker.stop()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+```
+When Uvicorn boots, all three workers launch as supervised `asyncio` background tasks. On application shutdown, each worker is signaled to stop, and remaining tasks are awaited.
+
+---
+
+### 9.6 MongoDB Scheduled Units: Durable Configuration vs Hot Path
+
+#### Collection Handle Status
+
+In [`app/platform/mongodb.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py#L49), the handle exists:
+```python
+scheduled_units = database["scheduled_units"]
+```
+This line establishes application access to the MongoDB collection. **However, no configuration-sync worker, startup loader, or periodic MongoDB-to-Redis reconciliation logic is currently implemented in the code.**
+
+#### Architectural Intended Design vs Current Implemented Behavior
+
+| Dimension | Intended Blueprint Design | Current Implemented Behavior |
+| :--- | :--- | :--- |
+| **System of Record** | MongoDB `scheduled_units` holds durable unit configurations (cadence, query terms, active status, org ID). | Hot-path unit configurations are written directly to Redis (`unit:{unit_id}`) via test/seed scripts. |
+| **Hot-Path Scheduler** | Redis ZSET (`scheduler:due:...`) stores only IDs and scores; Redis Hash stores operational metadata. | Implemented and verified in Redis. |
+| **Sync Mechanism** | Orchestrator boots, reads active units from MongoDB `scheduled_units`, populates Redis hot path, and runs periodic reconciliation. | **Not Yet Implemented**. Hot path operates independently of MongoDB. Units must be directly registered in Redis. |
+
+---
+
+### 9.7 Test Suite & Verification Matrix
+
+Four standalone integration test suites verify the scheduler implementation:
+
+1. **[`app/test/test_scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_service.py)**:
+   - Registers a test unit scheduled 60 seconds into the future.
+   - Verifies hash metadata (`term`, `cadence_seconds`) stored in Redis `unit:{unit_id}`.
+   - Verifies unit is **not** returned when `now = future_time - 1`.
+   - Verifies unit **is** returned when `now = future_time`.
+   - Cleans up Redis test keys.
+
+2. **[`app/test/test_scheduler_dispatch.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_dispatch.py)**:
+   - Registers a due unit with `next_run_at = now - 1`.
+   - Dispatches via `dispatch_due_unit()`, asserting result receipt.
+   - Verifies stream message published to `queue:connector:{platform}:{priority}` with accurate `term` and `unit_id`.
+   - Verifies `zscore` was updated to `next_run > now`.
+   - Re-dispatches at the identical timestamp; asserts return is `None` and stream message count remains 1.
+
+3. **[`app/test/test_scheduler_tick.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_tick.py)**:
+   - Registers a due unit and runs one tick via `dispatch_due_units_once(platform_priority_keys={active_key})`.
+   - Asserts return count is 1 and stream contains the job.
+   - Executes second tick immediately at identical `now`; asserts return count is 0.
+
+4. **[`app/test/test_scheduler_worker.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_worker.py)**:
+   - Creates `SchedulerWorker(tick_seconds=0.05)`.
+   - Mocks `dispatch_due_units_once` to count ticks and call `await worker.stop()` on tick 3.
+   - Runs `worker.run()` with `asyncio.wait_for(timeout=2)`.
+   - Asserts call count reached exactly 3 and worker stopped gracefully.
+
+#### Verified Test Execution Results
+
+All four test suites were executed directly in the project environment using PowerShell:
+
+```powershell
+# Command execution from argus-orchestrator root:
+.\venv\Scripts\python.exe -m app.test.test_scheduler_service
+# Output:
+# PASS: scheduled unit registered
+# PASS: metadata stored in Redis
+# PASS: future unit is not returned early
+# PASS: unit is returned when due
+# Cleaned up test data (Exit code: 0)
+
+.\venv\Scripts\python.exe -m app.test.test_scheduler_dispatch
+# Output:
+# PASS: due unit dispatched
+# PASS: connector stream contains the job
+# PASS: next run time was updated
+# PASS: repeated dispatch did not add another job (Exit code: 0)
+
+.\venv\Scripts\python.exe -m app.test.test_scheduler_tick
+# Output:
+# PASS: dispatcher found and dispatched the due unit
+# PASS: job published to the correct stream
+# PASS: second tick did not dispatch the unit again (Exit code: 0)
+
+.\venv\Scripts\python.exe -m app.test.test_scheduler_worker
+# Output:
+# PASS: scheduler worker executed three ticks
+# PASS: scheduler worker stopped gracefully (Exit code: 0)
+```
+
+---
+
+### 9.8 Critical Architectural Limitations & Hardening Topics
+
+Before the scheduler pipeline can be considered production-ready, the following limitations must be addressed:
+
+1. **Stream Contract Mismatch**:
+   - The existing connector worker (`argus-connector`) listens strictly on `queue:connector:rss` (`settings.connector_stream`).
+   - The new scheduler publishes to per-platform/priority streams (e.g., `queue:connector:rss:high`).
+   - **Status: Not Yet Integrated.** The connector cannot consume scheduled jobs until the connector worker is configured to consume multi-priority streams or stream routing is unified.
+
+2. **End-to-End Orchestration Not Yet Demonstrated**:
+   - While `SchedulerWorker` is wired into `app/main.py` lifespan and isolated tests pass, the system has **not yet been demonstrated running end-to-end** with live scheduled units, a running connector consumer reading multi-priority streams, and results returning through `ResultWorker` to MongoDB.
+
+3. **Missing MongoDB-to-Redis Configuration Synchronizer**:
+   - The handle `scheduled_units` exists in `app/platform/mongodb.py`, but there is no service or worker syncing documents from MongoDB to Redis.
+   - Startup hydration and periodic reconciliation (e.g., hourly sync to catch drift or manual DB changes) are **Planned, Not Yet Implemented**.
+
+4. **Isolated Test Status**:
+   - Tests run with synthetic keys (`test-{uuid}`) and mocked dispatchers. They demonstrate mathematical correctness of the Lua script and worker loop, but do not prove production stability under high volume.
+
+5. **Future Hardening Topics**:
+   - **Active Keys Registry Format**: In `scheduler_service.py`, `register_scheduled_unit()` pushes `unit_key` (`unit:{unit_id}`) into `schedule:active_keys`, but `dispatch_due_units_once()` expects `{platform}:{priority}` (see Discrepancy Register below).
+   - **Malformed Keys & Missing Units**: If a unit hash is evicted or deleted from Redis while remaining in the sorted set, the Lua script errors.
+   - **Scheduling Fairness**: If one platform/priority queue has thousands of overdue units, `limit_per_key` could starve subsequent queues.
+   - **Redis Persistence Guarantees**: Redis must be configured with append-only file (`AOF`) persistence to prevent loss of scheduled state across broker restarts.
+   - **Downstream Failure Handling**: If a connector worker fails to crawl an item, the schedule will still advance. A dead-letter queue (DLQ) or backoff mechanism for failed scheduled runs is required.
+
+6. **Single Orchestrator Process Constraint**:
+   - The current architecture supports only **one running orchestrator process**. If multiple orchestrator instances are started, their `SchedulerWorker` daemons will execute redundant ticks. Distributed scheduling leadership (e.g., via a Redis distributed lock or leader election) must be implemented before horizontal scaling of the orchestrator is supported.
+
+---
+
+### 9.9 Beginner-Friendly Component Breakdown, Flow Diagram & Status Matrix
+
+#### Component Breakdown
+
+```text
+1. register_scheduled_unit()
+   - What it does: Enrolls a search task into Redis scheduling.
+   - Why it exists: Establishes metadata and initial execution time for recurrent crawls.
+   - Input: unit_id, platform, priority, next_run_at, term, cadence_seconds, options.
+   - Output: None (populates Redis keys).
+   - Data Structures: Hash 'unit:{unit_id}', ZSET 'scheduler:due:{platform}:{priority}', Set 'schedule:active_keys'.
+   - On Failure: Raises ValueError for invalid inputs; rolls back Redis pipeline on connection failure.
+   - Next Connection: Read by get_due_unit_id() when next_run_at arrives.
+
+2. get_due_unit_id()
+   - What it does: Scans the sorted set for units whose timestamp <= now.
+   - Why it exists: Identifies candidate units ready for execution.
+   - Input: platform, priority, limit, now.
+   - Output: list[str] of candidate unit_ids.
+   - Data Structures: ZSET 'scheduler:due:{platform}:{priority}'.
+   - On Failure: Raises ValueError on invalid limit; returns empty list on network error or no due units.
+   - Next Connection: Candidates passed to dispatch_due_unit().
+
+3. dispatch_due_unit()
+   - What it does: Atomically validates, publishes, and reschedules a due unit via Lua.
+   - Why it exists: Guarantees zero duplicate job dispatches within the reschedule window.
+   - Input: unit_id, platform, priority, now.
+   - Output: dict containing stream_name, stream_message_id, next_run_at, request_id (or None).
+   - Data Structures: Evaluates Lua against ZSET, Hash, and target Redis Stream.
+   - On Failure: Returns None if not due/disabled; raises error if metadata corrupt.
+   - Next Connection: Publishes message to Redis Stream for Argus Connector.
+
+4. dispatch_due_units_once()
+   - What it does: Runs one sweep over active platform/priority combinations.
+   - Why it exists: Drives the batch dispatch cycle for a single tick.
+   - Input: limit_per_key, now, platform_priority_keys (optional).
+   - Output: Integer count of dispatched units.
+   - Data Structures: Reads Set 'schedule:active_keys', delegates to ZSETs and Streams.
+   - On Failure: Catches malformed keys, logs warnings, continues loop.
+   - Next Connection: Invoked repeatedly by SchedulerWorker.
+
+5. SchedulerWorker
+   - What it does: Background daemon that ticks every dispatch_tick_seconds (5s).
+   - Why it exists: Provides autonomous, hands-off execution inside the FastAPI process.
+   - Input: None (configured via settings).
+   - Output: Continuous dispatch ticks logged to stdout/file.
+   - Data Structures: Manages asyncio Event and task lifecycle.
+   - On Failure: Logs error and sleeps tick_seconds before retrying.
+   - Next Connection: Supervised by app/main.py lifespan.
+```
+
+#### Scheduler Execution Flow Diagram
+
+```mermaid
+flowchart TD
+    subgraph Registration ["1. Registration Phase"]
+        A["register_scheduled_unit()"] -->|"ZADD (score=timestamp)"| B[("ZSET: scheduler:due:{p}:{pri}")]
+        A -->|"HSET (metadata)"| C[("HASH: unit:{unit_id}")]
+        A -->|"SADD"| D[("SET: schedule:active_keys")]
+    end
+
+    subgraph Polling ["2. Candidate Discovery (Tick)"]
+        E["SchedulerWorker (every 5s)"] --> F["dispatch_due_units_once()"]
+        F -->|"SMEMBERS"| D
+        F -->|"ZRANGEBYSCORE (max=now)"| B
+        B -.->|"Candidate unit_ids (Read-Only)"| F
+    end
+
+    subgraph AtomicDispatch ["3. Atomic Execution (Lua Script)"]
+        F -->|"dispatch_due_unit()"| G{"_DISPATCH_DUE_UNIT_SCRIPT"}
+        G -->|"1. Verify due score <= now"| G
+        G -->|"2. Read metadata"| C
+        G -->|"3. XADD job payload"| H[("Stream: queue:connector:{p}:{pri}")]
+        G -->|"4. ZADD (next_run = now + cadence)"| B
+    end
+
+    subgraph Downstream ["4. Connector Consumption"]
+        H -.->|"PENDING INTEGRATION (Stream Contract Mismatch)"| I["ConnectorWorker (argus-connector)"]
+        I -->|"xreadgroup / xautoclaim"| J["Crawl & Extract Articles"]
+        J -->|"XADD CrawlResult"| K[("Stream: connector:rss:results")]
+        K -->|"xreadgroup"| L["ResultWorker (orchestrator)"]
+        L -->|"Upsert Articles & ACK"| M[("MongoDB: rss_items")]
+    end
+
+    style H stroke:#f66,stroke-width:2px,stroke-dasharray: 5 5
+    style I stroke:#f66,stroke-width:2px,stroke-dasharray: 5 5
+```
+
+#### Implementation Status Matrix
+
+| Component | Status | Evidence | Remaining Work |
+| :--- | :--- | :--- | :--- |
+| **`scheduler_service.py`** | **Implemented & Tested in Isolation** | Verified in [`app/services/scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py); tests pass with exit code 0. | Fix `ACTIVE_KEYS_SET` registration format; normalize `_due_key` naming. |
+| **Atomic Lua Script** | **Implemented & Tested in Isolation** | Verified in `_DISPATCH_DUE_UNIT_SCRIPT`; passes idempotency and schedule advance assertions. | Add dead-letter handling for corrupt metadata. |
+| **`SchedulerWorker`** | **Implemented & Tested in Isolation** | Verified in [`app/workers/scheduler_worker.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py); clean shutdown verified in test. | Add metrics and health-check reporting. |
+| **FastAPI Lifespan** | **Implemented** | Verified in [`app/main.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/main.py); worker started & stopped in `lifespan`. | Live end-to-end verification during full application startup. |
+| **MongoDB `scheduled_units`** | **Planned (Handle Implemented)** | Collection handle initialized in [`app/platform/mongodb.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py#L49). | Implement MongoDB-to-Redis synchronizer and startup reconciliation. |
+| **Connector Multi-Stream Contract** | **Not Yet Integrated** | Connector listens on `queue:connector:rss`; scheduler pushes to `queue:connector:{platform}:{priority}`. | Update `ConnectorWorker` to support multi-stream consumption or route scheduled jobs to `queue:connector:rss`. |
+| **Distributed Scheduler Lock** | **Planned** | Current architecture restricted to single orchestrator instance. | Implement Redis leader election / distributed lock for multi-instance high availability. |
+
+#### Discrepancy Register (Code vs. Specification)
+
+During architectural inspection, three specific discrepancies between the code and specification were identified:
+
+1. **`ACTIVE_KEYS_SET` Value Discrepancy**:
+   - In [`scheduler_service.py` (line 87)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L87), `register_scheduled_unit()` executes `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`, which stores `unit:{unit_id}` (e.g. `unit:test-123`).
+   - However, in [`dispatch_due_units_once()` (line 243)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L243), the loop expects keys in `ACTIVE_KEYS_SET` to be formatted as `platform:priority` (`platforms, priority = active_keys.split(":", 1)`).
+   - In [`test_scheduler_tick.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_tick.py#L40), the test bypassed this by passing `platform_priority_keys={active_key}` explicitly.
+   - *Resolution Required*: In `register_scheduled_unit()`, change `pipe.sadd(ACTIVE_KEYS_SET, f"{platform}:{priority}")`.
+
+2. **Key Prefix Naming Inconsistency**:
+   - The architectural design specification describes the sorted set as `schedule:due:{platform}:{priority}` and the active set as `schedule:active_keys`.
+   - In [`scheduler_service.py` (line 21)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L21), [`_due_key()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L16-L22) constructs `f"scheduler:due:{platform.lower()}:{priority.lower()}"` (with `scheduler:due:` rather than `schedule:due:`).
+   - In `test_scheduler_service.py` (line 72), test cleanup attempted to delete from `"schedule:active_key"` (singular).
+   - *Resolution Required*: Standardize the naming prefix across all modules to `schedule:due:{platform}:{priority}` and `schedule:active_keys`.
+
+3. **Function Signature Pluralization**:
+   - The design specification refers to `get_due_unit_ids()`.
+   - The actual implementation in [`scheduler_service.py` (line 92)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L92) is named [`get_due_unit_id()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L92-L116) (singular).
+   - *Resolution Required*: Add alias or rename to `get_due_unit_ids()` to accurately reflect that it returns a list of candidate IDs.
+

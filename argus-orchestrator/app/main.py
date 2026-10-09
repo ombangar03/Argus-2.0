@@ -7,29 +7,45 @@ from app.core.logging import setup_logging
 from app.workers.request_worker import RequestWorker
 from app.workers.result_worker import ResultWorker
 
+from app.workers.scheduler_worker import SchedulerWorker
+
 setup_logging()
 
 request_worker = RequestWorker(poll_interval=2.0)
 result_worker = ResultWorker(block_ms=2000, batch_size=10)
+scheduler_worker = SchedulerWorker()
+
 background_tasks = []
+
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Starts both Orchestrator workers on FastAPI startup."""
-    print("🚀 Argus Orchestrator starting up on Port 8000...")
+    """Start and stop the Orchestrator background workers."""
 
-    # Launch outbound dispatcher and inbound ingestor
-    t1 = asyncio.create_task(request_worker.start())
-    t2 = asyncio.create_task(result_worker.start())
-    background_tasks.extend([t1, t2])
-    yield
+    print("Argus Orchestrator starting up on Port 8000...")
 
-    # Graceful shutdown
-    print("🛑 Argus Orchestrator shutting down...")
-    request_worker.stop()
-    result_worker.stop()
-    await asyncio.gather(*background_tasks, return_exceptions=True)
+    background_tasks = [
+        asyncio.create_task(request_worker.start(), name="request-worker"),
+        asyncio.create_task(result_worker.start(), name="result-worker"),
+        asyncio.create_task(scheduler_worker.run(), name="scheduler-worker"),
+    ]
+
+    try:
+        yield
+    finally:
+        print("Argus Orchestrator shutting down...")
+
+        # Signal each worker to stop.
+        request_worker.stop()
+        result_worker.stop()
+        await scheduler_worker.stop()
+
+        # Wait for the workers to finish their shutdown.
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+
+        print("Argus Orchestrator shutdown complete.")
+
 
 
 app = FastAPI(

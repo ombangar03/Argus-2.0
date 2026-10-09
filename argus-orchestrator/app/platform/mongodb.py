@@ -45,3 +45,5 @@ async def check_mongodb():
         logger.exception("MongoDB connection failed")
 
         return False
+
+scheduled_units = database["scheduled_units"]

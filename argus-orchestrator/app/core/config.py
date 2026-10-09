@@ -11,10 +11,12 @@ class Settings(BaseSettings):
     consumer_group: str = "orchestrator-results"
     consumer_name: str = "orchestrator-1"
 
+    dispatch_tick_seconds: int = 5
+
     model_config = SettingsConfigDict(
         env_file = ".env",
         case_sensitive=False,
         extra="ignore"
     )
-
+    
 settings = Settings()
