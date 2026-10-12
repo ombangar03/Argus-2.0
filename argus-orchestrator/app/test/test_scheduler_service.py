@@ -69,7 +69,7 @@ async def main():
         await redis_client.delete(unit_key)
 
         await redis_client.srem(
-            "schedule:active_key",
+            "schedule:active_keys",
             f"{platform}:{priority}",
         )
         

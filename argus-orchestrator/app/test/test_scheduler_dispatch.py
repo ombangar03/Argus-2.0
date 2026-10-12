@@ -1,91 +1,217 @@
 
-import asyncio
-import time
-import uuid
+import logging
+import unittest
+from unittest.mock import AsyncMock, patch
 
-from app.platform.redis import redis_client
-from app.services.scheduler_service import (
-    register_scheduled_unit,
-    dispatch_due_unit,
-    _due_key,
-    _unit_key,
-)
+from app.services import scheduler_service
 
 
-async def main():
-    # Unique platform keeps this test separate from real schedules.
-    platform = f"test-{uuid.uuid4().hex}"
-    priority = "high"
-    unit_id = f"test-unit-{uuid.uuid4().hex}"
+class TestSchedulerDispatch(unittest.IsolatedAsyncioTestCase):
 
-    due_key = _due_key(platform, priority)
-    unit_key = _unit_key(unit_id)
-    stream_name = f"queue:connector:{platform}:{priority}"
+    def setUp(self):
+        self.redis = AsyncMock()
+        self.create_request = AsyncMock(
+            return_value={
+                "request_id": "scheduled:unit-001:1900.000000",
+                "created": True,
+            }
+        )
 
-    try:
-        now = time.time()
+        self.redis_patch = patch.object(
+            scheduler_service,
+            "redis_client",
+            self.redis,
+        )
+        self.request_patch = patch.object(
+            scheduler_service,
+            "create_scheduled_rss_request",
+            self.create_request,
+        )
 
-        await register_scheduled_unit(
-            unit_id=unit_id,
-            platform=platform,
-            priority=priority,
-            next_run_at=now - 1,
+        self.redis_patch.start()
+        self.request_patch.start()
+
+        self.addCleanup(self.redis_patch.stop)
+        self.addCleanup(self.request_patch.stop)
+
+        self.unit_id = "unit-001"
+        self.platform = "rss"
+        self.priority = "high"
+        self.due_score = 1900.0
+        self.now = 2000.0
+        self.cadence_seconds = 300
+
+        self.due_key = scheduler_service._due_key(
+            self.platform,
+            self.priority,
+        )
+        self.unit_key = scheduler_service._unit_key(self.unit_id)
+
+        self.metadata = {
+            "term": "copper prices",
+            "platform": "rss",
+            "priority": "high",
+            "org_id": "test-org",
+            "search_options": '{"language": "en"}',
+            "cadence_seconds": str(self.cadence_seconds),
+            "enabled": "true",
+        }
+
+        self.redis.zscore.return_value = self.due_score
+        self.redis.hgetall.return_value = self.metadata
+        self.redis.eval.return_value = 1
+
+    async def test_due_unit_creates_request_with_correct_arguments(self):
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
+        )
+
+        self.create_request.assert_awaited_once_with(
+            unit_id="unit-001",
             term="copper prices",
-            cadence_seconds=300,
+            scheduled_for=1900.0,
+            priority="high",
             org_id="test-org",
             search_options={"language": "en"},
         )
 
-        # Dispatch the due unit.
-        result = await dispatch_due_unit(
-            unit_id=unit_id,
-            platform=platform,
-            priority=priority,
-            now=now,
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result["request_id"],
+            "scheduled:unit-001:1900.000000",
+        )
+        self.assertEqual(result["next_run_at"], "2300.0")
+        self.assertEqual(result["created"], "True")
+
+        print("PASS: due unit creates a request with correct arguments")
+
+    async def test_due_time_is_advanced_after_request_creation(self):
+        call_order = []
+
+        async def create_request_side_effect(**kwargs):
+            call_order.append("request_created")
+            return {
+                "request_id": "scheduled:unit-001:1900.000000",
+                "created": True,
+            }
+
+        async def eval_side_effect(*args):
+            call_order.append("advance_due_time")
+            return 1
+
+        self.create_request.side_effect = create_request_side_effect
+        self.redis.eval.side_effect = eval_side_effect
+
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
         )
 
-        assert result is not None
-        print("PASS: due unit dispatched")
-
-        # Confirm a message was published.
-        messages = await redis_client.xrange(stream_name)
-        assert len(messages) == 1
-
-        message_id, payload = messages[0]
-        assert payload["term"] == "copper prices"
-        assert payload["unit_id"] == unit_id
-        print("PASS: connector stream contains the job")
-
-        # Confirm the next run is in the future.
-        next_run = await redis_client.zscore(due_key, unit_id)
-        assert next_run is not None
-        assert next_run > now
-        print("PASS: next run time was updated")
-
-        # Dispatching again at the same time must not add another job.
-        second_result = await dispatch_due_unit(
-            unit_id=unit_id,
-            platform=platform,
-            priority=priority,
-            now=now,
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            call_order,
+            ["request_created", "advance_due_time"],
         )
 
-        assert second_result is None
-
-        messages_after_retry = await redis_client.xrange(stream_name)
-        assert len(messages_after_retry) == 1
-        print("PASS: repeated dispatch did not add another job")
-
-    finally:
-        # Clean up only this test's isolated Redis data.
-        await redis_client.zrem(due_key, unit_id)
-        await redis_client.delete(unit_key, stream_name)
-        await redis_client.srem(
-            "schedule:active_keys",
-            f"{platform}:{priority}",
+        self.redis.eval.assert_awaited_once_with(
+            scheduler_service._ADVANCE_DUE_TIME_SCRIPT,
+            1,
+            self.due_key,
+            self.unit_id,
+            self.due_score,
+            self.now + self.cadence_seconds,
         )
-        await redis_client.aclose()
+
+        print("PASS: Redis due time advances after request creation")
+
+    async def test_changed_due_score_returns_none_and_logs(self):
+        self.redis.eval.return_value = 0
+
+        with self.assertLogs(
+            scheduler_service.logger,
+            level=logging.INFO,
+        ) as captured:
+            result = await scheduler_service.dispatch_due_unit(
+                unit_id=self.unit_id,
+                platform=self.platform,
+                priority=self.priority,
+                now=self.now,
+            )
+
+        self.assertIsNone(result)
+        self.create_request.assert_awaited_once()
+
+        self.assertTrue(
+            any(
+                "already advanced" in message.lower()
+                for message in captured.output
+            ),
+            f"Expected 'already advanced' in logs: {captured.output}",
+        )
+
+        print("PASS: changed due score returns None and logs the condition")
+
+    async def test_future_due_unit_is_not_dispatched(self):
+        self.redis.zscore.return_value = self.now + 100
+
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
+        )
+
+        self.assertIsNone(result)
+        self.create_request.assert_not_awaited()
+        self.redis.hgetall.assert_not_awaited()
+        self.redis.eval.assert_not_awaited()
+
+        print("PASS: future unit does not create a request")
+
+    async def test_missing_metadata_does_not_create_request(self):
+        self.redis.hgetall.return_value = {}
+
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
+        )
+
+        self.assertIsNone(result)
+        self.create_request.assert_not_awaited()
+        self.redis.eval.assert_not_awaited()
+
+        print("PASS: missing metadata does not create a request")
+
+    async def test_scheduler_does_not_publish_to_connector_stream(self):
+        await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
+        )
+
+        self.redis.xadd.assert_not_awaited()
+
+        # The replacement Lua script must only advance the due score.
+        self.assertNotIn(
+            "XADD",
+            scheduler_service._ADVANCE_DUE_TIME_SCRIPT.upper(),
+        )
+
+        # The script receives only the sorted-set key, not a stream key.
+        eval_args = self.redis.eval.await_args.args
+        self.assertEqual(eval_args[1], 1)
+        self.assertEqual(eval_args[2], self.due_key)
+
+        print("PASS: scheduler does not publish to a connector stream")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    unittest.main()

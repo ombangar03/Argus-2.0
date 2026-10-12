@@ -1,4 +1,3 @@
-from multiprocessing.sharedctypes import Value
 import logging 
 import asyncio 
 
@@ -51,11 +50,12 @@ class SchedulerWorker:
             try:
                 await self.run_once()
             
-            except asyncio.CancelError:
+            except asyncio.CancelledError:
+                logger.info("Scheduler worker received cancellation signal.")
                 raise
 
             except Exception:
-                logger.info("Scheduler tick failed.")
+                logger.exception("Scheduler tick failed.")
 
             try:
                 await asyncio.wait_for(

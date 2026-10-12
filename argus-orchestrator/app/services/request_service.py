@@ -1,4 +1,4 @@
-import logging 
+﻿import logging
 import json
 from datetime import datetime, timezone
 from typing import Optional
@@ -12,120 +12,172 @@ from app.schemas.request import ConnectorRequest
 
 logger = logging.getLogger(__name__)
 
-async def dispatch_request() -> Optional[ConnectorRequest]:
+
+_IDEMPOTENT_XADD_SCRIPT = """
+local existing_id = redis.call("GET", KEYS[2])
+
+if existing_id then
+    return existing_id
+end
+
+local message_id = redis.call(
+    "XADD",
+    KEYS[1],
+    "*",
+    unpack(ARGV)
+)
+
+redis.call("SET", KEYS[2], message_id)
+
+return message_id
+"""
+
+
+async def _publish_request_idempotently(
+    request_id: str,
+    payload: dict,
+) -> str:
     """
-    1. Atomically finds one pending request and marks it as 'processing'.
-    2. Validates against ConnectorRequest schema.
-    3. Publishes it to the Redis connector stream.
-    4. Returns the dispatched ConnectorRequest or None if no pending work.
+    Publish a request once per request_id.
+
+    A retry returns the original Redis stream message ID,
+    provided the deduplication record still exists.
+    """
+    if not request_id.strip():
+        raise ValueError("request_id must not be empty")
+
+    dedupe_key = f"argus:dispatch:request:{request_id}:stream_message_id"
+
+    # Redis stream fields are passed as alternating field/value arguments.
+    flat_fields = []
+    for field, value in payload.items():
+        flat_fields.extend((field, str(value)))
+
+    message_id = await redis_client.eval(
+        _IDEMPOTENT_XADD_SCRIPT,
+        2,
+        settings.connector_stream,
+        dedupe_key,
+        *flat_fields,
+    )
+
+    if not message_id:
+        raise RuntimeError(
+            f"Redis did not return a message ID for request {request_id}"
+        )
+
+    return str(message_id)
+
+
+async def dispatch_request() -> Optional[ConnectorRequest]:
+    """Claim a pending request, validate it, publish it to Redis,
+    and record the dispatch details in MongoDB.
     """
 
-    # 1. Atomically claim one pending request
+    # 1. Claim one pending request atomically.
+    now = datetime.now(timezone.utc)
+
     claimed_doc = await rss_requests.find_one_and_update(
-        {
-            "status": "pending"
-        },
+        {"status": "pending"},
         {
             "$set": {
                 "status": "processing",
-                "claimed_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc)
+                "claimed_at": now,
+                "updated_at": now,
             }
         },
-        return_document=ReturnDocument.AFTER
+        return_document=ReturnDocument.AFTER,
     )
 
     if not claimed_doc:
-        logger.debug("No pending RSS requests found. No work to dispatch.")
+        logger.debug("No pending RSS requests found.")
         return None
 
     request_id = claimed_doc.get("request_id") or str(claimed_doc["_id"])
 
+    # 2. Validate the request.
     try:
-        # 2. Build and validate the schema using Pydantic
         request_obj = ConnectorRequest(
             request_id=request_id,
             source=claimed_doc["source"],
             source_type=claimed_doc["source_type"],
             source_url=claimed_doc["url"],
             metadata=claimed_doc.get("metadata", {}),
-        ) 
-
-        # 3. Publish to Redis stream
-        # this is where the job leaves orchestrator. queue:connector:rss
-
-        dispatch_time = datetime.now(timezone.utc)
-
-        redis_payload = request_obj.model_dump()
-
-        redis_payload["metadata"] = json.dumps(
-            redis_payload["metadata"]
         )
+    except (ValidationError, KeyError) as exc:
+        logger.exception("Request %s failed validation.", request_id)
 
-        stream_message_id = await redis_client.xadd(
-            settings.connector_stream,
-            redis_payload
-        )
-
-        logger.info(
-            f"Dispatched request {request_id} to {settings.connector_stream} (msg_id: {stream_message_id})"
-        )
-
-        # 4. Save stream audit info back to MongoDB
         await rss_requests.update_one(
+            {"_id": claimed_doc["_id"]},
             {
-                "_id": claimed_doc["_id"]
+                "$set": {
+                    "status": "failed",
+                    "error_message": f"Validation error: {exc}",
+                    "updated_at": datetime.now(timezone.utc),
+                }
             },
+        )
+        raise
+
+    # 3. Publish to Redis.
+    redis_payload = request_obj.model_dump()
+    redis_payload["metadata"] = json.dumps(redis_payload["metadata"])
+
+    
+    try:
+        stream_message_id = await _publish_request_idempotently(
+            request_id,
+            redis_payload,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Redis publication failed for request %s.",
+            request_id,
+        )
+        await rss_requests.update_one(
+            {"_id": claimed_doc["_id"]},
+            {
+                "$set": {
+                    "status": "pending",
+                    "error_message": f"Redis dispatch error: {exc}",
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+        raise
+
+    # This block must be outside the Redis except block.
+    dispatch_time = datetime.now(timezone.utc)
+
+    try:
+        await rss_requests.update_one(
+            {"_id": claimed_doc["_id"]},
             {
                 "$set": {
                     "stream_message_id": stream_message_id,
                     "dispatched_at": dispatch_time,
-                    "updated_at": datetime.now(timezone.utc)
+                    "updated_at": datetime.now(timezone.utc),
+                    "error_message": None,
                 }
-            }
-        )
-
-        return request_obj
-    
-    except ValidationError as exc:
-        logger.error(
-            f"Failed to validate claimed request {request_id}",
-            extra={"errors": exc.errors()}
-        )
-
-        # Mark as failed so invalid document doesn't loop forever
-        await rss_requests.update_one(
-            {
-                "_id": claimed_doc["_id"]
             },
-            {
-                "$set": {
-                    "status": "failed",
-                    "error_message": f"Validation error: {str(exc)}",
-                    "updated_at": datetime.now(timezone.utc)
-                }
-            }
+        )
+    except Exception:
+        logger.exception(
+            "Redis accepted request %s (message ID %s), "
+            "but MongoDB audit update failed.",
+            request_id,
+            stream_message_id,
         )
         raise
 
-    except Exception as exc:
-        logger.exception(f"Failed to dispatch request {request_id} to Redis: {exc}")
+    logger.info(
+        "Dispatched request %s to %s (message ID: %s)",
+        request_id,
+        settings.connector_stream,
+        stream_message_id,
+    )
 
-        # Rollback status back to pending for transient errors (e.g. Redis disconnect)
-        await rss_requests.update_one(
-            {
-                "_id": claimed_doc["_id"]
-            },
-            {
-                "$set": {
-                    "status": "pending",
-                    "error_message": f"Dispatch error: {str(exc)}",
-                    "updated_at": datetime.now(timezone.utc)
-                }
-            }
-        )
-        raise
-
+    return request_obj
 
 if __name__ == "__main__":
     import asyncio

@@ -154,6 +154,9 @@ async def process_crawl_result(
             }
         )
 
+        if update_result.matched_count == 0:
+            raise ValueError(f"Request {request_id} not found")
+
         logger.info(
             f"Request {request_id} marked as 'completed'. Matched: {update_result.matched_count}, Items Saved: {stats['inserted']}"
         )
