@@ -776,19 +776,19 @@ result = await dispatch_news_queries()
 
 **Key Functions & Redis Structures:**
 1. **Key Helpers:**
-   - `_due_key(platform, priority)`: Returns `scheduler:due:{platform}:{priority}` (Redis Sorted Set, where score = Unix timestamp).
-   - `_unit_key(unit_id)`: Returns `unit:{unit_id}` (Redis Hash holding metadata).
-   - `ACTIVE_KEYS_SET = "schedule:active_keys"`: Redis Set tracking active platform/priority combinations.
+   - `_due_key(platform, priority)`: Returns `scheduler:due:{platform.lower()}:{priority.lower()}` (Redis Sorted Set, where score = Unix timestamp).
+   - `_unit_key(unit_id)`: Returns `unit:{unit_id}` (Redis Hash holding unit configuration metadata).
+   - `ACTIVE_KEYS_SET = "schedule:active_keys"`: Redis Set intended to track active `{platform}:{priority}` combinations for dispatcher sweeps.
 2. **`register_scheduled_unit()`**:
    - Validates inputs (`cadence_seconds > 0`, non-empty strings).
    - Serializes `search_options` to JSON and normalizes metadata strings.
    - Executes atomic pipeline:
      - `pipe.zadd(due_key, {unit_id: next_run_at})`
      - `pipe.hset(unit_key, mapping=metadata)`
-     - `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`
+     - `pipe.sadd(ACTIVE_KEYS_SET, unit_key)` *(Note: see Defect Register 1 below — currently records `unit_key` rather than `f"{platform}:{priority}"`)*.
 3. **`get_due_unit_id()`**:
-   - Read-only candidate query: queries Redis Sorted Set with `zrangebyscore(due_key, min="-inf", max=current_time, num=limit)`.
-   - Explicitly does **not** claim, lock, or pop units.
+   - Read-only candidate query: queries Redis Sorted Set with `zrangebyscore(due_key, min="-inf", max=current_time, start=0, num=limit)`.
+   - Explicitly does **not** claim, lock, or pop units. Returns candidate `list[str]`.
 4. **`dispatch_due_unit()`**:
    - Invokes Redis Lua script `_DISPATCH_DUE_UNIT_SCRIPT` with keys `[due_key, unit_key, stream_name]`.
    - Lua script checks due timestamp, verifies metadata, drops disabled units, publishes job to `queue:connector:{platform}:{priority}` via `XADD`, advances schedule to `now + cadence` via `ZADD`, and returns `{1, stream_id, next_run_at, request_id}`.
@@ -796,6 +796,9 @@ result = await dispatch_news_queries()
    - Sweeps active registry keys (or optional `platform_priority_keys` filter for isolated tests).
    - Fetches due candidate unit IDs and executes `dispatch_due_unit()` for each.
    - Returns count of successfully dispatched units.
+   - *(Note: see Defect Register 2 below — loop variable shadowing and premature indented `return` terminate the loop after the first key)*.
+6. **MongoDB Integration Status**:
+   - `from app.platform.mongodb import scheduled_units` is imported on line 7, but is entirely unreferenced. Durable configuration persistence and startup reconciliation remain pending.
 
 ---
 
@@ -803,11 +806,11 @@ result = await dispatch_news_queries()
 **Purpose:** Autonomous background daemon that runs dispatcher ticks on a recurring timer (`dispatch_tick_seconds`, default 5s).
 
 **Key Mechanics:**
-- **Initialization:** Reads `dispatch_tick_seconds` from `app.core.config.settings`.
+- **Initialization:** Reads `dispatch_tick_seconds` from `app.core.config.settings` (can be overridden in constructor).
 - **`run_once()`:** Invokes `dispatch_due_units_once()` and logs the number of dispatched units.
 - **`run()`:** Continuous async loop:
   - Executes `run_once()`.
-  - Catches ordinary exceptions, logs `"Scheduler tick failed."`, and continues running without terminating the worker.
+  - Catches ordinary exceptions, logs `"Scheduler tick failed."`, and continues running without terminating the worker. *(Note: logs at INFO level without exception traceback; see Defect Register 6)*.
   - Waits `tick_seconds` using `asyncio.wait_for(self._stop_event.wait(), timeout=self.tick_seconds)`.
 - **`stop()`:** Sets `_stop_event` to break the loop and ensure graceful application shutdown.
 - **FastAPI Integration:** Instantiated and supervised within `app/main.py` lifespan alongside `RequestWorker` and `ResultWorker`.
@@ -822,7 +825,7 @@ result = await dispatch_news_queries()
 - Confirms hash fields `term` and `cadence_seconds` match in Redis `unit:{unit_id}`.
 - Confirms unit is **not** returned when `now = future_time - 1`.
 - Confirms unit **is** returned when `now = future_time`.
-- Cleans up created test keys upon completion.
+- Cleans up created test keys upon completion *(Note: contains typo in cleanup `"schedule:active_key"`; see Defect Register 3)*.
 
 ---
 
@@ -839,10 +842,10 @@ result = await dispatch_news_queries()
 ---
 
 ### File 24: `app/test/test_scheduler_tick.py`
-**Purpose:** Verification test confirming `dispatch_due_units_once()` executes full candidate sweep and preserves idempotency on repeated ticks.
+**Purpose:** Verification test confirming `dispatch_due_units_once()` executes candidate sweep and preserves idempotency on repeated ticks.
 
 **Verifications:**
-- Registers a due unit and runs one dispatcher tick with `platform_priority_keys={active_key}`.
+- Registers a due unit and runs one dispatcher tick with `platform_priority_keys={active_key}` explicitly supplied.
 - Confirms returned dispatch count is `1`.
 - Confirms job is placed in target connector stream.
 - Executes second tick immediately at identical `now` timestamp; asserts count is `0`.
@@ -858,8 +861,6 @@ result = await dispatch_news_queries()
 - Test counter requests `await worker.stop()` upon reaching 3 ticks.
 - Runs `worker.run()` with `asyncio.wait_for(timeout=2)`.
 - Asserts exactly 3 ticks executed and worker exited cleanly.
-
----
 
 ## 5. argus-connector: File-by-File Walkthrough
 
@@ -1512,9 +1513,10 @@ The Argus 2.0 architecture adheres to strict separation of concerns, decoupling 
 │   │   Operational Store       │                │       Hot-Path Scheduler          │   │
 │   │   [MongoDB: argus]        │                │       [Redis: Port 6379]          │   │
 │   │   - scheduled_units (Doc) │   (Sync loop   │   - schedule:active_keys (SET)    │   │
-│   │   - news_queries          │    [PENDING])  │   - scheduler:due:{p}:{pri} (ZSET)│   │
-│   │   - rss_requests          │ ─────────────> │   - unit:{unit_id} (HASH)         │   │
-│   │   - rss_items             │                └─────────────────┬─────────────────┘   │
+│   │   - news_queries          │    [PENDING])  │     [Defect: stores unit_key]     │   │
+│   │   - rss_requests          │ ─────────────> │   - scheduler:due:{p}:{pri} (ZSET)│   │
+│   │   - rss_items             │                │   - unit:{unit_id} (HASH)         │   │
+│   │   └───────────────────────┘                └─────────────────┬─────────────────┘   │
 │   └─────────────▲─────────────┘                                  │                     │
 │                 │                                                │ dispatch_due_unit() │
 │                 │                                                ▼ (Atomic Lua Script) │
@@ -1595,7 +1597,8 @@ To support high-frequency scheduling without placing load on MongoDB, the schedu
 ```text
 Redis Key Space:
 ┌───────────────────────────────────┐
-│ Set: 'schedule:active_keys'       │ ──> Contains active '{platform}:{priority}' combinations
+│ Set: 'schedule:active_keys'       │ ──> Proposed: '{platform}:{priority}' combinations
+│                                   │     Current Code Defect: stores 'unit:{unit_id}'
 └───────────────────────────────────┘
 ┌───────────────────────────────────┐
 │ Hash: 'unit:{unit_id}'            │ ──> Contains unit metadata: term, org_id, search_options,
@@ -1603,22 +1606,22 @@ Redis Key Space:
 ┌───────────────────────────────────┐
 │ Sorted Set:                       │ ──> Member: unit_id
 │ 'scheduler:due:{platform}:{pri}'  │     Score:  Unix epoch timestamp (float seconds)
-└───────────────────────────────────┘
+└───────────────────────────────────┘     (Code uses 'scheduler:due:', spec uses 'schedule:due:')
 ┌───────────────────────────────────┐
-│ Target Stream:                    │ ──> Dispatched job payload
-│ 'queue:connector:{platform}:{pri}'│
+│ Target Stream:                    │ ──> Dispatched job payload: 'queue:connector:{p}:{pri}'
+│ 'queue:connector:{platform}:{pri}'│     (Mismatch: Connector worker consumes 'queue:connector:rss')
 └───────────────────────────────────┘
 ```
 
 #### Redis Data Structures
 
 1. **`schedule:active_keys`** (Redis Set):
-   - Registry of all active platform/priority combinations requiring polling sweeps (e.g., `rss:high`, `nse:normal`).
-   - Enables the dispatcher tick to discover which sorted sets have scheduled tasks without scanning the entire Redis keyspace.
+   - **Proposed Architectural Behavior**: Registry of all active platform/priority combinations requiring polling sweeps (e.g., `rss:high`, `nse:normal`), enabling the dispatcher tick to discover active queues without scanning the entire keyspace.
+   - **Current Implementation Behavior (Defect Register #1)**: Written in [`register_scheduled_unit()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L50) as `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`, which stores `unit:{unit_id}` (e.g., `unit:unit-101`) rather than `{platform}:{priority}`. This causes `dispatch_due_units_once()` to fail key parsing during un-mocked sweeps.
 
 2. **`scheduler:due:{platform}:{priority}`** (Redis Sorted Set - ZSET):
    - Stores unit IDs as members, scored by their next scheduled execution timestamp (Unix epoch seconds).
-   - Conceptually specified as `schedule:due:{platform}:{priority}`; implemented in code via [`_due_key()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L16-L22) as `scheduler:due:{platform}:{priority}`.
+   - **Naming Inconsistency (Defect Register #4)**: Proposed blueprint specifies `schedule:due:{platform}:{priority}`; actual implementation in [`_due_key()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L16-L22) constructs `scheduler:due:{platform.lower()}:{priority.lower()}`.
    - Allows fast range queries to find overdue units whose score is $\le \text{now}$.
 
 3. **`unit:{unit_id}`** (Redis Hash):
@@ -1632,6 +1635,8 @@ Redis Key Space:
      - `enabled`: String `"true"` or `"false"`.
 
 4. **`queue:connector:{platform}:{priority}`** (Redis Stream):
+   - Multi-priority stream where the Lua script publishes dispatched scheduled tasks (e.g. `queue:connector:rss:high`).
+   - **Stream Contract Mismatch (Defect Register #8)**: Current `argus-connector` consumes strictly from static `queue:connector:rss`. It cannot consume from this multi-priority stream pattern until aligned.
    - Target stream pattern used by the dispatcher to publish execution tasks.
    - For example: `queue:connector:rss:high`.
 
@@ -1808,33 +1813,55 @@ async def lifespan(app: FastAPI):
         await scheduler_worker.stop()
         await asyncio.gather(*background_tasks, return_exceptions=True)
 ```
+
 When Uvicorn boots, all three workers launch as supervised `asyncio` background tasks. On application shutdown, each worker is signaled to stop, and remaining tasks are awaited.
 
 ---
 
 ### 9.6 MongoDB Scheduled Units: Durable Configuration vs Hot Path
 
-#### Collection Handle Status
+The Argus 2.0 blueprint defines a clean two-tier architecture between durable storage and hot-path execution:
 
-In [`app/platform/mongodb.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py#L49), the handle exists:
-```python
-scheduled_units = database["scheduled_units"]
+```text
+[ Durable Storage: MongoDB ]                     [ Hot-Path Execution: Redis ]
+  Database: argus                                  Sorted Set: scheduler:due:{p}:{pri}
+  Collection: scheduled_units                      Hash: unit:{unit_id}
+  Role: Durable System of Record                   Set: schedule:active_keys
+  Operations: CRUD, UI, Auditing, Cadence Config   Role: Sub-millisecond Scheduling & Dispatch
 ```
-This line establishes application access to the MongoDB collection. **However, no configuration-sync worker, startup loader, or periodic MongoDB-to-Redis reconciliation logic is currently implemented in the code.**
 
-#### Architectural Intended Design vs Current Implemented Behavior
+#### Verification of Current MongoDB Implementation Status
 
-| Dimension | Intended Blueprint Design | Current Implemented Behavior |
+A meticulous inspection of the repository reveals:
+
+1. **Collection Handle Implemented**:
+   [`app/platform/mongodb.py` (line 49)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py#L49) defines:
+   ```python
+   scheduled_units = database["scheduled_units"]
+   ```
+2. **Unused Import in Scheduler Service**:
+   [`app/services/scheduler_service.py` (line 7)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L7) imports `scheduled_units`:
+   ```python
+   from app.platform.mongodb import scheduled_units
+   ```
+   However, `scheduled_units` is **never referenced or called anywhere else in the file or service layer**.
+3. **Synchronization & Startup Reconciliation Still Pending**:
+   - There is **no background worker, synchronizer service, or change-stream listener** that syncs documents from MongoDB `scheduled_units` into Redis.
+   - There is **no startup reconciliation hook** in `app/main.py` that reads active units from MongoDB upon boot and seeds the Redis sorted sets and metadata hashes.
+   - Currently, scheduled units must be inserted **directly into Redis** via `register_scheduled_unit()` (as done in tests).
+   - **Conclusion**: MongoDB durable scheduled-unit persistence is **Planned, Not Yet Implemented**.
+
+| Architectural Layer | Specification (Proposed Behavior) | Actual Verified Code State (Current Behavior) |
 | :--- | :--- | :--- |
-| **System of Record** | MongoDB `scheduled_units` holds durable unit configurations (cadence, query terms, active status, org ID). | Hot-path unit configurations are written directly to Redis (`unit:{unit_id}`) via test/seed scripts. |
-| **Hot-Path Scheduler** | Redis ZSET (`scheduler:due:...`) stores only IDs and scores; Redis Hash stores operational metadata. | Implemented and verified in Redis. |
-| **Sync Mechanism** | Orchestrator boots, reads active units from MongoDB `scheduled_units`, populates Redis hot path, and runs periodic reconciliation. | **Not Yet Implemented**. Hot path operates independently of MongoDB. Units must be directly registered in Redis. |
+| **System of Record** | MongoDB `scheduled_units` holds durable unit configurations (cadence, query terms, active status, org ID). | Collection handle initialized in `mongodb.py`. No documents, schemas, or models wired. |
+| **Hot Path State** | Redis holds due sorted sets (`schedule:due:...`), metadata hashes (`unit:...`), and active registry keys (`{platform}:{priority}`). | **Implemented in Isolation with Known Defects**: Code uses `scheduler:due:...`, hashes `unit:...`, but registers `unit:{unit_id}` in `schedule:active_keys` instead of `{platform}:{priority}`. |
+| **Sync Mechanism** | Orchestrator boots, reads active units from MongoDB `scheduled_units`, hydrates Redis hot path, and runs periodic reconciliation. | **Not Yet Implemented**. Hot path operates entirely detached from MongoDB; units must be manually registered in Redis via `register_scheduled_unit()`. |
 
 ---
 
 ### 9.7 Test Suite & Verification Matrix
 
-Four standalone integration test suites verify the scheduler implementation:
+Four standalone integration test suites verify the scheduler implementation in `argus-orchestrator`:
 
 1. **[`app/test/test_scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_service.py)**:
    - Registers a test unit scheduled 60 seconds into the future.
@@ -1861,73 +1888,133 @@ Four standalone integration test suites verify the scheduler implementation:
    - Runs `worker.run()` with `asyncio.wait_for(timeout=2)`.
    - Asserts call count reached exactly 3 and worker stopped gracefully.
 
-#### Verified Test Execution Results
+#### Live Verified Test Execution Results
 
-All four test suites were executed directly in the project environment using PowerShell:
+All four test suites were directly executed and verified on the local host (Windows PowerShell, Python 3.11.0, with an active Redis instance on port 6379):
+
+> [!NOTE]
+> **MongoDB Verification Boundary**: The console output in the test execution traces displays `Initializing MongoDB client....` and prints the configured MongoDB URL (`mongodb://localhost:27017`) solely because [`app/services/scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L7) contains a top-level import of `scheduled_units` from [`app/platform/mongodb.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py). At import time, `mongodb.py` executes top-level `print()` statements and instantiates an `AsyncIOMotorClient` object lazily. The scheduler test suites interact exclusively with Redis; **no queries, write operations, or ping commands were executed against MongoDB**. Printing the configured MongoDB URL at module load does not constitute proof of database connectivity, and MongoDB connectivity was **not** verified by these test runs. Redis test execution results and data structures were independently and comprehensively verified.
 
 ```powershell
-# Command execution from argus-orchestrator root:
-.\venv\Scripts\python.exe -m app.test.test_scheduler_service
+# 1. Verification of test_scheduler_service.py:
+$env:PYTHONPATH="C:\Users\OmMangeshBangar\PycharmProjects\argus-2.0\argus-orchestrator"
+..\argus-orchestrator\venv\Scripts\python.exe ..\argus-orchestrator\app\test\test_scheduler_service.py
 # Output:
+# ======================================
+# Initializing Redis client....
+# Redis URL: redis://localhost:6379/0
+# =======================================
+# Initializing MongoDB client....
+# MongoDB URL: mongodb://localhost:27017
+# MongoDB Database: argus
 # PASS: scheduled unit registered
 # PASS: metadata stored in Redis
 # PASS: future unit is not returned early
 # PASS: unit is returned when due
-# Cleaned up test data (Exit code: 0)
+# Cleaned up test data
+# Exit code: 0
 
-.\venv\Scripts\python.exe -m app.test.test_scheduler_dispatch
+# 2. Verification of test_scheduler_dispatch.py:
+..\argus-orchestrator\venv\Scripts\python.exe ..\argus-orchestrator\app\test\test_scheduler_dispatch.py
 # Output:
 # PASS: due unit dispatched
 # PASS: connector stream contains the job
 # PASS: next run time was updated
-# PASS: repeated dispatch did not add another job (Exit code: 0)
+# PASS: repeated dispatch did not add another job
+# Exit code: 0
 
-.\venv\Scripts\python.exe -m app.test.test_scheduler_tick
+# 3. Verification of test_scheduler_tick.py:
+..\argus-orchestrator\venv\Scripts\python.exe ..\argus-orchestrator\app\test\test_scheduler_tick.py
 # Output:
 # PASS: dispatcher found and dispatched the due unit
 # PASS: job published to the correct stream
-# PASS: second tick did not dispatch the unit again (Exit code: 0)
+# PASS: second tick did not dispatch the unit again
+# Exit code: 0
 
-.\venv\Scripts\python.exe -m app.test.test_scheduler_worker
+# 4. Verification of test_scheduler_worker.py:
+..\argus-orchestrator\venv\Scripts\python.exe ..\argus-orchestrator\app\test\test_scheduler_worker.py
 # Output:
 # PASS: scheduler worker executed three ticks
-# PASS: scheduler worker stopped gracefully (Exit code: 0)
+# PASS: scheduler worker stopped gracefully
+# Exit code: 0
 ```
+
+#### Diagnostic Scratch Test: Unmasking the Default Tick Defect
+
+While the four isolated tests passed, an architect-level diagnostic test was executed to evaluate the behavior of `dispatch_due_units_once(now=now)` when called **without** explicit `platform_priority_keys` (which is precisely how `SchedulerWorker.run_once()` invokes it in production):
+
+```python
+# Live scratch execution:
+unit_id = f"test-bug-{uuid.uuid4().hex}"
+await register_scheduled_unit(unit_id, "rss", "high", now - 1, "test", 300)
+count = await dispatch_due_units_once(now=now)
+# Result: count = 0 (Dispatched 0 units despite unit being overdue!)
+```
+**Diagnostic Finding**: The four test suites passed only because:
+1. `test_scheduler_tick.py` bypassed reading `ACTIVE_KEYS_SET` by manually passing `platform_priority_keys={f"{platform}:{priority}"}`.
+2. `test_scheduler_worker.py` mocked out `dispatch_due_units_once` entirely with a fake counter.
+3. In production, calling `dispatch_due_units_once()` with default arguments fails to dispatch any due units because `ACTIVE_KEYS_SET` contains `unit:{unit_id}` instead of `{platform}:{priority}`, and the `return` statement prematurely exits the sweep loop on the first entry.
 
 ---
 
 ### 9.8 Critical Architectural Limitations & Hardening Topics
 
-Before the scheduler pipeline can be considered production-ready, the following limitations must be addressed:
+Before the scheduler subsystem can be promoted to production, the following architectural limitations must be resolved:
 
-1. **Stream Contract Mismatch**:
-   - The existing connector worker (`argus-connector`) listens strictly on `queue:connector:rss` (`settings.connector_stream`).
-   - The new scheduler publishes to per-platform/priority streams (e.g., `queue:connector:rss:high`).
-   - **Status: Not Yet Integrated.** The connector cannot consume scheduled jobs until the connector worker is configured to consume multi-priority streams or stream routing is unified.
+#### 1. Stream Contract Mismatch (Orchestrator vs Connector)
 
-2. **End-to-End Orchestration Not Yet Demonstrated**:
-   - While `SchedulerWorker` is wired into `app/main.py` lifespan and isolated tests pass, the system has **not yet been demonstrated running end-to-end** with live scheduled units, a running connector consumer reading multi-priority streams, and results returning through `ResultWorker` to MongoDB.
+There is a fundamental contract mismatch between the stream name published by the scheduler and the stream name consumed by the connector:
 
-3. **Missing MongoDB-to-Redis Configuration Synchronizer**:
-   - The handle `scheduled_units` exists in `app/platform/mongodb.py`, but there is no service or worker syncing documents from MongoDB to Redis.
-   - Startup hydration and periodic reconciliation (e.g., hourly sync to catch drift or manual DB changes) are **Planned, Not Yet Implemented**.
+- **Orchestrator Scheduler**: Publishes connector jobs to dynamic, multi-stream priority queues:
+  ```
+  queue:connector:{platform}:{priority}
+  ```
+  *(Example: `queue:connector:rss:high`, `queue:connector:rss:low`, `queue:connector:bing:normal`)*.
+- **Existing Connector Worker**:
+  [`argus-connector/app/core/config.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector/app/core/config.py) and [`argus-connector/app/workers/connector_worker.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector/app/workers/connector_worker.py) configure:
+  ```python
+  connector_stream: str = "queue:connector:rss"
+  ```
+  and listen strictly on that single static stream.
+- **Impact**: Any jobs dispatched by the scheduler into `queue:connector:rss:high` will **never be consumed or acknowledged** by the current `ConnectorWorker`.
+- **Status: Pending Alignment**. End-to-end integration is blocked until either:
+  1. `ConnectorWorker` is updated to support multi-stream consumption / pattern-based stream reading (`XREADGROUP` across multiple priority streams per platform), or
+  2. Orchestrator provides a configurable stream routing mechanism that maps priority queues down to `settings.connector_stream`.
 
-4. **Isolated Test Status**:
-   - Tests run with synthetic keys (`test-{uuid}`) and mocked dispatchers. They demonstrate mathematical correctness of the Lua script and worker loop, but do not prove production stability under high volume.
+#### 2. End-to-End Orchestration Not Yet Demonstrated
 
-5. **Future Hardening Topics**:
-   - **Active Keys Registry Format**: In `scheduler_service.py`, `register_scheduled_unit()` pushes `unit_key` (`unit:{unit_id}`) into `schedule:active_keys`, but `dispatch_due_units_once()` expects `{platform}:{priority}` (see Discrepancy Register below).
-   - **Malformed Keys & Missing Units**: If a unit hash is evicted or deleted from Redis while remaining in the sorted set, the Lua script errors.
-   - **Scheduling Fairness**: If one platform/priority queue has thousands of overdue units, `limit_per_key` could starve subsequent queues.
-   - **Redis Persistence Guarantees**: Redis must be configured with append-only file (`AOF`) persistence to prevent loss of scheduled state across broker restarts.
-   - **Downstream Failure Handling**: If a connector worker fails to crawl an item, the schedule will still advance. A dead-letter queue (DLQ) or backoff mechanism for failed scheduled runs is required.
+While `SchedulerWorker` is wired into `app/main.py` lifespan and passes unit tests, the system has **not yet executed an end-to-end integration pipeline**:
+`Scheduled Unit -> Redis Hot Path -> Atomic Lua Dispatch -> ConnectorWorker Crawl -> ResultWorker Ingestion -> MongoDB rss_items`.
 
-6. **Single Orchestrator Process Constraint**:
-   - The current architecture supports only **one running orchestrator process**. If multiple orchestrator instances are started, their `SchedulerWorker` daemons will execute redundant ticks. Distributed scheduling leadership (e.g., via a Redis distributed lock or leader election) must be implemented before horizontal scaling of the orchestrator is supported.
+#### 3. Missing MongoDB-to-Redis Configuration Synchronizer
+
+The MongoDB collection handle `scheduled_units` exists, but there is no hydration or synchronization logic:
+- Units created in MongoDB are not automatically loaded into Redis.
+- Cadence changes or disabling units in MongoDB do not propagate to Redis.
+- Redis broker reboot would wipe all in-memory schedules without MongoDB startup reconciliation.
+
+#### 4. Single Orchestrator Process Constraint (Lack of Distributed Lock)
+
+`SchedulerWorker` runs unconditionally on every instance of `argus-orchestrator`. If horizontal scaling is attempted (running 2+ orchestrator replicas):
+- Both workers will trigger ticks at overlapping intervals.
+- While the atomic Lua script prevents duplicate dispatches for a given timestamp, both instances will perform redundant `ZRANGEBYSCORE` and Redis evaluations, creating unnecessary lock contention and Redis CPU overhead.
+- A distributed leader election or Redis-based distributed mutex (`SET key val NX EX 5`) is required before horizontal scaling.
+
+#### 5. Head-of-Line Starvation & Scheduling Fairness
+
+In `dispatch_due_units_once()`, candidate retrieval uses `limit_per_key`. If one high-traffic platform accumulates thousands of due units, the dispatcher could spend significant execution time processing that queue while starving subsequent queues. Round-robin or weighted fair queuing across active keys will be necessary at scale.
+
+#### 6. Missing Dead-Letter & Failure Feedback Loop
+
+If a connector crashes or fails permanently while crawling a scheduled request, the orchestrator scheduler has already advanced `next_run_at` to `now + cadence`. There is currently no negative acknowledgement or failure feedback loop informing the scheduler to trigger an immediate retry or backoff.
+
+#### 7. Redis Persistence Requirements
+
+The scheduler relies on Redis as the operational store for next execution scores and metadata. If Redis is restarted without `AOF` (Append Only File) persistence enabled (`appendonly yes`), all active scheduling state and next run timestamps will be lost.
 
 ---
 
-### 9.9 Beginner-Friendly Component Breakdown, Flow Diagram & Status Matrix
+### 9.9 Beginner-Friendly Component Breakdown, Flow Diagram, Status Matrix & Defect Register
 
 #### Component Breakdown
 
@@ -1985,12 +2072,12 @@ flowchart TD
     subgraph Registration ["1. Registration Phase"]
         A["register_scheduled_unit()"] -->|"ZADD (score=timestamp)"| B[("ZSET: scheduler:due:{p}:{pri}")]
         A -->|"HSET (metadata)"| C[("HASH: unit:{unit_id}")]
-        A -->|"SADD"| D[("SET: schedule:active_keys")]
+        A -->|"SADD unit_key (Current Defect #1: stores 'unit:{unit_id}', not '{platform}:{priority}')"| D[("SET: schedule:active_keys")]
     end
 
     subgraph Polling ["2. Candidate Discovery (Tick)"]
         E["SchedulerWorker (every 5s)"] --> F["dispatch_due_units_once()"]
-        F -->|"SMEMBERS"| D
+        F -->|"SMEMBERS (reads 'unit:{unit_id}'; parsing fails without test override)"| D
         F -->|"ZRANGEBYSCORE (max=now)"| B
         B -.->|"Candidate unit_ids (Read-Only)"| F
     end
@@ -2013,38 +2100,74 @@ flowchart TD
 
     style H stroke:#f66,stroke-width:2px,stroke-dasharray: 5 5
     style I stroke:#f66,stroke-width:2px,stroke-dasharray: 5 5
+    style D stroke:#f90,stroke-width:2px,stroke-dasharray: 4 4
 ```
+
+> [!WARNING]
+> **Implementation vs. Blueprint Discrepancy in Flow Diagram:**
+> In the registration flow above, `register_scheduled_unit()` currently executes `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`, populating `schedule:active_keys` with `unit:{unit_id}` instead of `{platform}:{priority}` (Defect Register #1). In production (without test overrides), `dispatch_due_units_once()` attempts to split each member on `:` expecting `platform:priority`, which parses as `platform="unit"` and searches non-existent sorted sets `scheduler:due:unit:...`. The diagram explicitly depicts this current code defect.
 
 #### Implementation Status Matrix
 
 | Component | Status | Evidence | Remaining Work |
 | :--- | :--- | :--- | :--- |
-| **`scheduler_service.py`** | **Implemented & Tested in Isolation** | Verified in [`app/services/scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py); tests pass with exit code 0. | Fix `ACTIVE_KEYS_SET` registration format; normalize `_due_key` naming. |
-| **Atomic Lua Script** | **Implemented & Tested in Isolation** | Verified in `_DISPATCH_DUE_UNIT_SCRIPT`; passes idempotency and schedule advance assertions. | Add dead-letter handling for corrupt metadata. |
-| **`SchedulerWorker`** | **Implemented & Tested in Isolation** | Verified in [`app/workers/scheduler_worker.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py); clean shutdown verified in test. | Add metrics and health-check reporting. |
-| **FastAPI Lifespan** | **Implemented** | Verified in [`app/main.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/main.py); worker started & stopped in `lifespan`. | Live end-to-end verification during full application startup. |
-| **MongoDB `scheduled_units`** | **Planned (Handle Implemented)** | Collection handle initialized in [`app/platform/mongodb.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py#L49). | Implement MongoDB-to-Redis synchronizer and startup reconciliation. |
+| **`scheduler_service.py`** | **Implemented (Prototype, Has Defects)** | Verified in [`app/services/scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py); tests pass in isolation. | Fix `ACTIVE_KEYS_SET` registration format; fix premature return in `dispatch_due_units_once()`. |
+| **Atomic Lua Script** | **Implemented & Verified** | Verified in `_DISPATCH_DUE_UNIT_SCRIPT`; passes idempotency and schedule advance assertions. | Add dead-letter handling for corrupt metadata. |
+| **`SchedulerWorker`** | **Implemented & Verified** | Verified in [`app/workers/scheduler_worker.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py); clean shutdown verified in test. | Fix INFO exception logging; add stack traces and health metrics. |
+| **FastAPI Lifespan** | **Implemented & Verified** | Verified in [`app/main.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/main.py); worker started & stopped in `lifespan`. | Live end-to-end verification during full application startup. |
+| **MongoDB `scheduled_units`** | **Planned (Handle Only)** | Collection handle initialized in [`app/platform/mongodb.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py#L49). | Implement MongoDB-to-Redis synchronizer and startup reconciliation. |
 | **Connector Multi-Stream Contract** | **Not Yet Integrated** | Connector listens on `queue:connector:rss`; scheduler pushes to `queue:connector:{platform}:{priority}`. | Update `ConnectorWorker` to support multi-stream consumption or route scheduled jobs to `queue:connector:rss`. |
 | **Distributed Scheduler Lock** | **Planned** | Current architecture restricted to single orchestrator instance. | Implement Redis leader election / distributed lock for multi-instance high availability. |
 
-#### Discrepancy Register (Code vs. Specification)
+#### Comprehensive Discrepancy & Defect Register
 
-During architectural inspection, three specific discrepancies between the code and specification were identified:
+During architectural review of the repository and execution traces, eight specific discrepancies and implementation defects were identified:
 
-1. **`ACTIVE_KEYS_SET` Value Discrepancy**:
-   - In [`scheduler_service.py` (line 87)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L87), `register_scheduled_unit()` executes `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`, which stores `unit:{unit_id}` (e.g. `unit:test-123`).
-   - However, in [`dispatch_due_units_once()` (line 243)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L243), the loop expects keys in `ACTIVE_KEYS_SET` to be formatted as `platform:priority` (`platforms, priority = active_keys.split(":", 1)`).
-   - In [`test_scheduler_tick.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_tick.py#L40), the test bypassed this by passing `platform_priority_keys={active_key}` explicitly.
-   - *Resolution Required*: In `register_scheduled_unit()`, change `pipe.sadd(ACTIVE_KEYS_SET, f"{platform}:{priority}")`.
+1. **`ACTIVE_KEYS_SET` Registration Format Defect**:
+   - **Location**: [`scheduler_service.py` (line 99)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L99).
+   - **Issue**: `register_scheduled_unit()` executes `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`, which stores `unit:{unit_id}` (e.g. `unit:test-123`).
+   - **Conflict**: In [`dispatch_due_units_once()` (line 243)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L243), the loop expects keys in `ACTIVE_KEYS_SET` to be formatted as `{platform}:{priority}` (`platforms, priority = active_keys.split(":", 1)`).
+   - **Consequence**: In production, `dispatch_due_units_once()` splits `"unit:..."` into platform `"unit"` and priority `"<unit_id>"`, queries non-existent sorted set `scheduler:due:unit:<unit_id>`, and dispatches 0 units.
+   - **Resolution Required**: Change to `pipe.sadd(ACTIVE_KEYS_SET, f"{platform}:{priority}")`.
 
-2. **Key Prefix Naming Inconsistency**:
-   - The architectural design specification describes the sorted set as `schedule:due:{platform}:{priority}` and the active set as `schedule:active_keys`.
-   - In [`scheduler_service.py` (line 21)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L21), [`_due_key()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L16-L22) constructs `f"scheduler:due:{platform.lower()}:{priority.lower()}"` (with `scheduler:due:` rather than `schedule:due:`).
-   - In `test_scheduler_service.py` (line 72), test cleanup attempted to delete from `"schedule:active_key"` (singular).
-   - *Resolution Required*: Standardize the naming prefix across all modules to `schedule:due:{platform}:{priority}` and `schedule:active_keys`.
+2. **Loop Variable Shadowing & Premature Return in `dispatch_due_units_once()`**:
+   - **Location**: [`scheduler_service.py` (lines 240-279)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L240-L279).
+   - **Issue**:
+     1. Loop header `for active_keys in sorted(active_keys):` shadows the outer set `active_keys`.
+     2. `return dispatched_count` is indented **inside** the body of the `for` loop!
+   - **Consequence**: The sweep terminates immediately after evaluating the first active key. It never iterates over any remaining active combinations.
+   - **Resolution Required**: Rename loop variable to `for active_key in sorted(active_keys):` and dedent `return dispatched_count` outside the loop.
 
-3. **Function Signature Pluralization**:
-   - The design specification refers to `get_due_unit_ids()`.
-   - The actual implementation in [`scheduler_service.py` (line 92)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L92) is named [`get_due_unit_id()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L92-L116) (singular).
-   - *Resolution Required*: Add alias or rename to `get_due_unit_ids()` to accurately reflect that it returns a list of candidate IDs.
+3. **Typo and Leaked Keys in `test_scheduler_service.py` Cleanup**:
+   - **Location**: [`app/test/test_scheduler_service.py` (line 72)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_service.py#L72).
+   - **Issue**: Cleanup calls `await redis_client.srem("schedule:active_key", f"{platform}:{priority}")`.
+   - **Conflict**: Key name has typo (`"schedule:active_key"` without 's'), and attempts to remove `{platform}:{priority}` while registration actually pushed `unit_key`.
+   - **Consequence**: Leaves orphaned `unit:{unit_id}` entries in Redis `schedule:active_keys` after every test run.
+   - **Resolution Required**: Fix key name to `ACTIVE_KEYS_SET` and remove `f"{platform}:{priority}"` (or `unit_key` pending fix #1).
 
+4. **Key Prefix Naming Inconsistency**:
+   - **Location**: [`scheduler_service.py` (line 21)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L21).
+   - **Issue**: `_due_key()` constructs `f"scheduler:due:{platform.lower()}:{priority.lower()}"`, whereas the design specification and active set use prefix `schedule:`.
+   - **Resolution Required**: Standardize on `schedule:due:{platform}:{priority}` across all modules and tests.
+
+5. **Function Signature Pluralization**:
+   - **Location**: [`scheduler_service.py` (line 103)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L103).
+   - **Issue**: Named `get_due_unit_id()` (singular) despite taking a `limit` and returning `list[str]`.
+   - **Resolution Required**: Rename or alias to `get_due_unit_ids()`.
+
+6. **Suppressed Exception Traceback in `SchedulerWorker.run()`**:
+   - **Location**: [`app/workers/scheduler_worker.py` (line 64)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py#L64).
+   - **Issue**: Catches unexpected tick exceptions with `except Exception: logger.info("Scheduler tick failed.")`.
+   - **Consequence**: Logs at `INFO` level without traceback (`logger.exception` or `exc_info=True`), silently masking runtime crashes in production logs.
+   - **Resolution Required**: Replace with `logger.exception("Scheduler tick failed with unexpected error.")`.
+
+7. **Dead MongoDB Import in `scheduler_service.py`**:
+   - **Location**: [`app/services/scheduler_service.py` (line 7)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L7).
+   - **Issue**: `from app.platform.mongodb import scheduled_units` is imported but never referenced.
+   - **Resolution Required**: Keep import when building the MongoDB sync bridge, or remove until sync worker is implemented.
+
+8. **Stream Contract Integration Mismatch**:
+   - **Location**: [`app/services/scheduler_service.py` (line 196)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L196) vs [`argus-connector/app/core/config.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector/app/core/config.py).
+   - **Issue**: Orchestrator scheduler publishes to `queue:connector:{platform}:{priority}`. Connector worker consumes strictly from `settings.connector_stream` (`queue:connector:rss`).
+   - **Consequence**: Connector will never pick up scheduled tasks dispatched to prioritized queues.
+   - **Resolution Required**: Parameterize `ConnectorWorker` to subscribe to multi-stream queues or configure a unified stream routing contract across services.
