@@ -88,6 +88,9 @@ class TestSchedulerMongoSync(unittest.IsolatedAsyncioTestCase):
             enabled=True,
             managed_by_mongodb=True,
             preserve_due_time=True,
+            schedule_type="interval",
+            timezone_name="Asia/Kolkata",
+            run_times=[],
         )
         print("PASS: enabled schedule is registered")
 

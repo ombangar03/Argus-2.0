@@ -1,6 +1,7 @@
-
 import logging
 import unittest
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from unittest.mock import AsyncMock, patch
 
 from app.services import scheduler_service
@@ -211,6 +212,72 @@ class TestSchedulerDispatch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(eval_args[2], self.due_key)
 
         print("PASS: scheduler does not publish to a connector stream")
+
+
+    async def _assert_daily_next_run(
+        self,
+        hour: int,
+        minute: int,
+        expected_day: int,
+        expected_hour: int,
+    ):
+        """Verify the next daily run using Asia/Kolkata time."""
+        ist = ZoneInfo("Asia/Kolkata")
+
+        local_now = datetime(
+            2026, 10, 13, hour, minute, tzinfo=ist
+        )
+        now_timestamp = local_now.timestamp()
+
+        expected_local = datetime(
+            2026, 10, expected_day,
+            expected_hour, 0, tzinfo=ist
+        )
+        expected_timestamp = expected_local.timestamp()
+
+        self.metadata.update({
+            "schedule_type": "daily_times",
+            "timezone_name": "Asia/Kolkata",
+            "run_times": '["10:00", "19:00"]',
+        })
+
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=now_timestamp,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(
+            float(result["next_run_at"]),
+            expected_timestamp,
+        )
+
+    async def test_daily_schedule_before_first_run(self):
+        await self._assert_daily_next_run(
+            hour=9,
+            minute=45,
+            expected_day=13,
+            expected_hour=10,
+        )
+
+    async def test_daily_schedule_between_run_times(self):
+        await self._assert_daily_next_run(
+            hour=10,
+            minute=5,
+            expected_day=13,
+            expected_hour=19,
+        )
+
+    async def test_daily_schedule_after_last_run(self):
+        await self._assert_daily_next_run(
+            hour=19,
+            minute=30,
+            expected_day=14,
+            expected_hour=10,
+        )
+
 
 
 if __name__ == "__main__":

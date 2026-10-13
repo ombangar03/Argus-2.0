@@ -1,8 +1,11 @@
-import logging 
-import asyncio 
+import logging
+import asyncio
 
 from app.core.config import settings
-from app.services.scheduler_service import dispatch_due_units_once
+from app.services.scheduler_service import (
+    dispatch_due_units_once,
+    sync_scheduled_units_from_mongodb,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +24,10 @@ class SchedulerWorker:
 
         self._stop_event = asyncio.Event()
 
-    
+
     async def run_once(self) -> int:
-        """Execute one dispatcher tick."""
+        """Synchronize schedules and execute one dispatcher tick."""
+        await sync_scheduled_units_from_mongodb()
 
         dispatched_count = await dispatch_due_units_once()
 
@@ -37,8 +41,6 @@ class SchedulerWorker:
 
     async def run(self) -> None:
         """Run dispatcher tick until shutdown is requested."""
-
-
         self._stop_event.clear()
 
         logger.info(
@@ -49,7 +51,7 @@ class SchedulerWorker:
         while not self._stop_event.is_set():
             try:
                 await self.run_once()
-            
+
             except asyncio.CancelledError:
                 logger.info("Scheduler worker received cancellation signal.")
                 raise
@@ -65,7 +67,7 @@ class SchedulerWorker:
 
             except asyncio.TimeoutError:
                 pass
-        
+
         logger.info("Scheduler worker stopped.")
 
     async def stop(self) -> None:
@@ -76,4 +78,3 @@ class SchedulerWorker:
         self._stop_event.set()
 
 
-        

@@ -1,6 +1,7 @@
 import logging
 import json
 import time
+from app.services.schedule_time_service import calculate_next_run
 from datetime import datetime, timezone
 
 from app.services.scheduled_request_service import (
@@ -59,6 +60,9 @@ async def register_scheduled_unit(
     enabled: bool = True,
     managed_by_mongodb: bool = False,
     preserve_due_time: bool = False,
+    schedule_type: str = "interval",
+    timezone_name: str = "Asia/Kolkata",
+    run_times: list[str] | None = None,
 ) -> None:
     """
     Registers or update a unit in redis scheduling structures.
@@ -99,6 +103,9 @@ async def register_scheduled_unit(
         "platform": platform,
         "priority": priority,
         "enabled": str(enabled).lower(),
+        "schedule_type": schedule_type,
+        "timezone_name": timezone_name,
+        "run_times": json.dumps(run_times or []),
     }
 
     async with redis_client.pipeline(transaction=True) as pipe:
@@ -181,6 +188,12 @@ async def sync_scheduled_units_from_mongodb() -> int:
             next_run_at = document["next_run_at"]
             cadence_seconds = document["cadence_seconds"]
 
+            schedule_type = document.get("schedule_type", "interval")
+            timezone_name = document.get("timezone_name", "Asia/Kolkata")
+            run_times = document.get("run_times", [])
+
+
+
             if not isinstance(platform, str) or not platform.strip():
                 raise ValueError("platform must be a non-empty string")
 
@@ -204,6 +217,20 @@ async def sync_scheduled_units_from_mongodb() -> int:
                     "next_run_at must be a datetime or Unix timestamp"
                 )
 
+            if schedule_type not in {"interval", "daily_times"}:
+                raise ValueError("unsupported schedule_type")
+
+            if not isinstance(timezone_name, str) or not timezone_name.strip():
+                raise ValueError("invalid timezone_name")
+
+            if not isinstance(run_times, list) or not all(
+                isinstance(value, str) for value in run_times
+            ):
+                raise ValueError("run_times must be a list of strings")
+
+            if schedule_type == "daily_times" and not run_times:
+                raise ValueError("daily_times requires run_times")
+
             await register_scheduled_unit(
                 unit_id=unit_id,
                 platform=platform,
@@ -216,6 +243,9 @@ async def sync_scheduled_units_from_mongodb() -> int:
                 enabled=True,
                 managed_by_mongodb=True,
                 preserve_due_time=True,
+                schedule_type=schedule_type,
+                timezone_name=timezone_name,
+                run_times=run_times,
             )
 
             synchronized_ids.add(unit_id)
@@ -355,6 +385,13 @@ async def dispatch_due_unit(
         search_options = json.loads(
             metadata.get("search_options") or "{}"
         )
+        schedule_type = metadata.get("schedule_type", "interval")
+        timezone_name = metadata.get(
+            "timezone_name",
+            "Asia/Kolkata",
+        )
+        run_times = json.loads(metadata.get("run_times") or "[]")
+
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(
             f"Invalid metadata for scheduled unit {unit_id}"
@@ -370,6 +407,18 @@ async def dispatch_due_unit(
             f"search_options must be an object for unit {unit_id}"
         )
 
+    if not isinstance(run_times, list) or not all(
+        isinstance(value, str) for value in run_times
+    ):
+        raise ValueError(
+            f"run_times must be a list of strings for unit {unit_id}"
+        )
+
+    if schedule_type == "daily_times" and not run_times:
+        raise ValueError(
+            f"Daily schedule requires run_times for unit {unit_id}"
+        )
+
     # Step A: create the durable request first.
     request = await create_scheduled_rss_request(
         unit_id=unit_id,
@@ -380,9 +429,23 @@ async def dispatch_due_unit(
         search_options=search_options,
     )
 
+
+
     # Step B: advance Redis only after the request exists
     # or the request service confirms that it already exists.
-    next_run_at = current_time + cadence_seconds
+    # Calculate the next execution time according to schedule type.
+    if schedule_type == "interval":
+        next_run_at = current_time + cadence_seconds
+
+    else:
+        next_run_at = calculate_next_run(
+            now=datetime.fromtimestamp(
+                current_time,
+                tz=timezone.utc,
+            ),
+            run_times=run_times,
+            timezone_name=timezone_name,
+        ).timestamp()
 
     advanced = await redis_client.eval(
         _ADVANCE_DUE_TIME_SCRIPT,
