@@ -53,7 +53,6 @@ class TestResultWorker(unittest.IsolatedAsyncioTestCase):
         mock_process_result.assert_awaited_once_with(payload)
         mock_redis.xack.assert_not_awaited()
 
-    
     @patch("app.workers.result_worker.redis_client")
     async def test_recovery_claims_and_processes_pending_message(
         self, mock_redis
