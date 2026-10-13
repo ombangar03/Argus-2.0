@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     consumer_group: str = "orchestrator-results"
     consumer_name: str = "orchestrator-1"
 
+    # Redis pending-result recovery
+    result_claim_idle_ms: int = 30000
+    result_recovery_interval: int = 10
+
     dispatch_tick_seconds: int = 5
 
     model_config = SettingsConfigDict(
