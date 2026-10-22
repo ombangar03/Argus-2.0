@@ -7,8 +7,92 @@ from pydantic import ValidationError
 from app.platform.mongodb import rss_items, rss_requests
 from app.schemas.result import CrawlResult, RSSItem
 
+from app.platform.redis import redis_client
+
 logger = logging.getLogger(__name__)
 
+ARTICLE_SEEN_PREFIX = "argus:article:seen:"
+ARTICLE_SEEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
+
+async def filter_unseen_items(
+    items: list[RSSItem],
+) -> tuple[list[RSSItem], int, int]:
+
+    """filter cache articles and repeated hashes within the current batch."""
+    unique_items: list[RSSItem] = []
+    seen_hashes: set[str] = set()
+
+    batch_duplicates = 0
+
+    for item in items:
+        if item.item_hash and item.item_hash in seen_hashes:
+            batch_duplicates += 1
+            continue
+
+        if item.item_hash:
+            seen_hashes.add(item.item_hash)
+
+        unique_items.append(item)
+
+    hashed_items = [item for item in unique_items if item.item_hash]
+
+    if not hashed_items:
+        return unique_items, 0, batch_duplicates
+
+    keys = [
+        f"{ARTICLE_SEEN_PREFIX}{item.item_hash}"
+        for item in hashed_items
+    ]
+
+    try:
+        values = await redis_client.mget(*keys)
+    except Exception:
+        logger.warning(
+            "Redis deduplication lookup failed; falling back to MongoDB.",
+            exc_info=True
+        )
+        return unique_items, 0, batch_duplicates
+
+    redis_seen_hashes = {
+        item.item_hash
+        for item, value in zip(hashed_items, values)
+        if value is not None
+    }
+
+    unseen_items = [
+        item
+        for item in unique_items
+        if not item.item_hash or item.item_hash not in redis_seen_hashes
+    ]
+
+    redis_duplicates = len(unique_items) - len(unseen_items)
+
+    return unseen_items, redis_duplicates, batch_duplicates
+
+
+async def mark_items_seen(items: list[RSSItem]) -> None:
+    """Cache hashes after the MongoDB persistence operation succeeds."""
+
+    hashes = {item.item_hash for item in items if item.item_hash}
+
+    if not hashes:
+        return
+
+    try:
+        async with redis_client.pipeline(transaction=False) as pipeline:
+            for item_hash in hashes:
+                pipeline.set(
+                    f"{ARTICLE_SEEN_PREFIX}{item_hash}",
+                    "1",
+                    ex=ARTICLE_SEEN_TTL_SECONDS,
+                )
+            await pipeline.execute()
+
+    except Exception:
+        logger.warning(
+            "Could not update the Redis article cache; MongoDB remains authoritative.",
+            exc_info=True
+        )
 
 async def ensure_indexes():
     """
@@ -135,7 +219,20 @@ async def process_crawl_result(
 
     # 2. Handle SUCCESS outcome
     if result.status == "success":
-        stats = await save_rss_items(result.items)
+        # stats = await save_rss_items(result.items)
+        items_to_save, redis_duplicates, batch_duplicates = (
+            await filter_unseen_items(result.items)
+        )
+
+        stats = await save_rss_items(items_to_save)
+
+        await mark_items_seen(items_to_save)
+
+        total_duplicates= (
+            stats["duplicates"]
+            + redis_duplicates
+            + batch_duplicates
+        )
 
         # Transition request status from 'processing' to 'completed'
         update_result = await rss_requests.update_one(
@@ -164,9 +261,9 @@ async def process_crawl_result(
         return {
             "request_id": request_id,
             "status": "completed",
-            "item_saved": stats["total"],
+            "item_saved": len(result.items),
             "items_inserted": stats["inserted"],
-            "items_duplicates": stats["duplicates"]
+            "items_duplicates": total_duplicates,
         }
 
     # 3. Handle FAILED outcome
@@ -196,6 +293,8 @@ async def process_crawl_result(
             "status": "failed",
             "error_message": error_msg
         }
+
+
 
 
 # if __name__ == "__main__":
