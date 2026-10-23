@@ -17,7 +17,18 @@ _IDEMPOTENT_XADD_SCRIPT = """
 local existing_id = redis.call("GET", KEYS[2])
 
 if existing_id then
-    return existing_id
+    local existing_message = redis.call(
+        "XRANGE",
+        KEYS[1],
+        existing_id,
+        existing_id,
+        "COUNT",
+        1
+    )
+
+    if #existing_message > 0 then
+        return existing_id
+    end
 end
 
 local message_id = redis.call(

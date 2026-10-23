@@ -224,7 +224,7 @@ class ResultWorker:
                     await asyncio.sleep(self.recovery_interval)
             except asyncio.CancelledError:
                 raise
-            except redis.exception.ResponseError as exc:
+            except redis.exceptions.ResponseError as exc:
                 logger.exception(
                     "Redis error during result XAUTOCLAIM: %s", exc
                 )
