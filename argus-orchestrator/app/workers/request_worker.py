@@ -1,9 +1,9 @@
 # Outbound dispatcher
 """
 What is It About? (Why Did We Need It?)
-Before creating 
+Before creating
 
-request_worker.py ,we already had 
+request_worker.py ,we already had
 
 request_service.py
 .
@@ -28,15 +28,19 @@ When you press Ctrl+C (or stop a Docker container), it safely finishes the curre
 """
 
 
-import asyncio 
+import asyncio
 import logging
-import signal 
+import signal
 from typing import Optional
 
 from app.core.logging import setup_logging
 from app.platform.mongodb import check_mongodb
 from app.platform.redis import check_redis
-from app.services.request_service import dispatch_request
+from app.core.config import settings
+from app.services.request_service import (
+    dispatch_request,
+    recover_stale_processing_requests,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +57,7 @@ class RequestWorker:
         self.poll_interval = poll_interval
         self._is_running = False
         self._stop_event = asyncio.Event()
+        self._last_recovery_time = 0.0
 
 
     async def start(self):
@@ -72,13 +77,32 @@ class RequestWorker:
 
         if not mongo_ok or not redis_ok:
             logger.error("Database or Redis is not Healthy.")
-            return 
+            return
 
         logger.info(f"Request worker started successfully. Polling interval: {self.poll_interval}s")
 
         # 2. Main processing Loop
         while self._is_running and not self._stop_event.is_set():
             try:
+                now = asyncio.get_running_loop().time()
+                recovery_interval = settings.request_recovery_interval
+
+                if now - self._last_recovery_time >=  recovery_interval:
+                    self._last_recovery_time = now
+
+                    try:
+                        recovered = await recover_stale_processing_requests()
+                        if recovered:
+                            logger.info(
+                            "Recovered %s stale request(s).",
+                            recovered,
+                        )
+
+                    except Exception:
+                        logger.exception(
+                            "Request recovery failed; normal dispatch will continue."
+                        )
+
                 # Atomically claim and dispatch one request from MongoDB to Redis
                 dispatched = await dispatch_request()
 
@@ -100,7 +124,7 @@ class RequestWorker:
 
             except asyncio.CancelledError:
                 logger.info("Request Worker received cancellation signal.")
-                break 
+                break
 
             except Exception as exc:
                 logger.exception(f"Unexpexted error in Request Worker loop: {exc}")
@@ -132,10 +156,10 @@ async def run_worker():
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, worker.stop)
-        
+
         except (NotImplementedError, AttributeError):
             # windows ProactorEventLoop does not support add_signal_handler
-            pass 
+            pass
 
     try:
         await worker.start()
@@ -147,6 +171,6 @@ async def run_worker():
 if __name__ == "__main__":
     try:
         asyncio.run(run_worker())
-    
+
     except KeyboardInterrupt:
         print("\nRequest Worker terminated by user.")

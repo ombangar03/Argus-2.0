@@ -11,7 +11,7 @@ class TestRedisDispatchRecovery(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.redis = redis.Redis(
             host="localhost",
-            port=6380,
+            port=6379,
             decode_responses=True,
         )
 
@@ -82,6 +82,8 @@ class TestRedisDispatchRecovery(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(retry_id, replacement_id)
         self.assertEqual(await self.redis.xlen(self.stream_key), 1)
+
+
 
 
 if __name__ == "__main__":
