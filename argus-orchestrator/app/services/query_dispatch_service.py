@@ -24,12 +24,37 @@ async def dispatch_news_queries():
     skipped_count = 0
 
     async for query_doc in cursor:
-        query = query_doc["query"]
-        source = query_doc["source"]
-        source_type = query_doc["source_type"]
-        
+        query = query_doc.get("query")
+        source = query_doc.get("source")
+        source_type = query_doc.get("source_type")
+
+        if (
+            not query
+            or not isinstance(query, str)
+            or not query.strip()
+            or not source
+            or not isinstance(source, str)
+            or not source.strip()
+            or not source_type
+            or not isinstance(source_type, str)
+            or not source_type.strip()
+        ):
+            logger.warning(
+                "Skipping malformed news query %s: query=%r, source=%r, source_type=%r",
+                query_doc.get("_id"),
+                query,
+                source,
+                source_type,
+            )
+            skipped_count += 1
+            continue
+
+        query = query.strip()
+        source = source.strip()
+        source_type = source_type.strip()
+
         # normalize query for duplicate detection
-        normalized_query = query.strip().lower()
+        normalized_query = query.lower()
 
         active_query_key = f"{source}:{source_type}:{normalized_query}"
 
