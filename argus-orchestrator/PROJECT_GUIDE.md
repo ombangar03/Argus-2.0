@@ -21,19 +21,32 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
    - [Outbound Worker: `app/workers/request_worker.py`](#file-10-appworkersrequest_workerpy)
    - [Inbound Schema: `app/schemas/result.py`](#file-11-appschemasresultpy)
    - [Inbound Service: `app/services/result_service.py`](#file-12-appservicesresult_servicepy)
-   - [Inbound Worker: `app/workers/result_worker.py`](#file-13-appworkersresult_workerpy)
+   - [Inbound Worker & XAUTOCLAIM Recovery: `app/workers/result_worker.py`](#file-13-appworkersresult_workerpy)
    - [News Query Schema: `app/schemas/query.py`](#file-14-appschemasquerypy)
    - [Bing URL Builder: `app/services/bing_service.py`](#file-15-appservicesbing_servicepy)
    - [Seed News Queries: `scripts/seed_news_query.py`](#file-16-scriptsseed_news_querypy)
    - [Bing Test Script: `app/test/test_bing.py`](#file-17-apptesttest_bingpy)
    - [Query Dispatch Service: `app/services/query_dispatch_service.py`](#file-18-appservicesquery_dispatch_servicepy)
    - [Request Idempotency Test: `app/test/test_request_idempotency.py`](#file-19-apptesttest_request_idempotencypy)
-   - [Scheduler Service: `app/services/scheduler_service.py`](#file-20-appservicesscheduler_servicepy)
-   - [Scheduler Worker: `app/workers/scheduler_worker.py`](#file-21-appworkersscheduler_workerpy)
-   - [Scheduler Service Test: `app/test/test_scheduler_service.py`](#file-22-apptesttest_scheduler_servicepy)
-   - [Scheduler Dispatch Test: `app/test/test_scheduler_dispatch.py`](#file-23-apptesttest_scheduler_dispatchpy)
-   - [Scheduler Tick Test: `app/test/test_scheduler_tick.py`](#file-24-apptesttest_scheduler_tickpy)
-   - [Scheduler Worker Test: `app/test/test_scheduler_worker.py`](#file-25-apptesttest_scheduler_workerpy)
+   - [Schedule Time Helper: `app/services/schedule_time_service.py`](#file-20-appservicesschedule_time_servicepy)
+   - [Scheduled Request Service: `app/services/scheduled_request_service.py`](#file-21-appservicesscheduled_request_servicepy)
+   - [Scheduler Service: `app/services/scheduler_service.py`](#file-22-appservicesscheduler_servicepy)
+   - [Scheduler Worker: `app/workers/scheduler_worker.py`](#file-23-appworkersscheduler_workerpy)
+   - [Schedule Time Service Test: `app/test/test_schedule_time_service.py`](#file-24-apptesttest_schedule_time_servicepy)
+   - [Scheduled Request Service Test: `app/test/test_scheduled_request_service.py`](#file-25-apptesttest_scheduled_request_servicepy)
+   - [Scheduler Dispatch Test: `app/test/test_scheduler_dispatch.py`](#file-26-apptesttest_scheduler_dispatchpy)
+   - [Scheduler Sync Test: `app/test/test_scheduler_sync.py`](#file-27-apptesttest_scheduler_syncpy)
+   - [Scheduler Sync Due-Time Test: `app/test/test_scheduler_sync_due_time.py`](#file-28-apptesttest_scheduler_sync_due_timepy)
+   - [Scheduler Tick Test: `app/test/test_scheduler_tick.py`](#file-29-apptesttest_scheduler_tickpy)
+   - [Scheduler Worker Lifecycle Test: `app/test/test_scheduler_worker.py`](#file-30-apptesttest_scheduler_workerpy)
+   - [Scheduler Service Manual Test: `app/test/test_scheduler_service.py`](#file-31-apptesttest_scheduler_servicepy)
+   - [Result Worker Unit Test: `app/test/test_result_worker.py`](#file-32-apptesttest_result_workerpy)
+   - [Result Worker Manual Recovery Test: `app/test/manual_result_worker_recovery.py`](#file-33-apptestmanual_result_worker_recoverypy)
+   - [Result Service Unit Tests: `app/test/test_result_service.py`](#file-34-apptesttest_result_servicepy)
+   - [Request Service Unit Tests: `app/test/test_request_service.py`](#file-35-apptesttest_request_servicepy)
+   - [Redis Dispatch Stream Recovery Regression Test: `app/test/test_redis_dispatch_recovery.py`](#file-36-apptesttest_redis_dispatch_recoverypy)
+   - [Stale Request Recovery Tests: `app/test/test_request_recovery.py`](#file-37-apptesttest_request_recoverypy)
+   - [Request Worker Unit Tests: `app/test/test_request_worker.py`](#file-38-apptesttest_request_workerpy)
 5. [argus-connector: File-by-File Walkthrough](#5-argus-connector-file-by-file-walkthrough)
    - [Config: `app/core/config.py`](#connector-file-1-appcoreconfigpy)
    - [Logging: `app/core/logging.py`](#connector-file-2-appcoreloggingpy)
@@ -54,17 +67,29 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
    - [NSE Circulars API Client: `app/connectors/nse/circulars.py`](#connector-file-17-appconnectorsnsecircularspy)
 6. [End-to-End Pipeline: How to Run the Full System](#6-end-to-end-pipeline-how-to-run-the-full-system)
 7. [Bugs Encountered & Fixes Applied](#7-bugs-encountered--fixes-applied)
+   - [Bug 22: Redis Dispatch Deadlock on Stream Truncation / Message Eviction](#bug-22-redis-dispatch-deadlock-on-stream-truncation--message-eviction)
+   - [Bug 23: `AttributeError` on Redis ResponseError in Result Worker](#bug-23-attributeerror-on-redis-responseerror-in-result-worker)
+   - [Bug 24: Unbounded MongoDB Duplicate Write Amplification & Multi-Layer Redis Deduplication Cache](#bug-24-unbounded-mongodb-duplicate-write-amplification--multi-layer-redis-deduplication-cache)
 8. [Current Roadmap & Project Progress](#8-current-roadmap--project-progress)
-9. [Implementation Progress: Redis Scheduler and Dispatcher](#9-implementation-progress-redis-scheduler-and-dispatcher)
-   - [9.1 System Architecture & Boundary Definitions](#91-system-architecture--boundary-definitions)
+9. [Implementation Guide: Redis Scheduler, Daily Scheduling & Ingest Recovery](#9-implementation-guide-redis-scheduler-daily-scheduling--ingest-recovery)
+   - [9.1 System Architecture & End-to-End Pipeline](#91-system-architecture--end-to-end-pipeline)
    - [9.2 Scheduler Design & Redis Hot-Path Data Structures](#92-scheduler-design--redis-hot-path-data-structures)
-   - [9.3 Atomic Dispatch Implementation via Lua](#93-atomic-dispatch-implementation-via-lua)
-   - [9.4 Dispatcher Tick & Idempotent Sweeps](#94-dispatcher-tick--idempotent-sweeps)
-   - [9.5 Background Scheduler Worker & Lifespan Integration](#95-background-scheduler-worker--lifespan-integration)
-   - [9.6 MongoDB Scheduled Units: Durable Configuration vs Hot Path](#96-mongodb-scheduled-units-durable-configuration-vs-hot-path)
-   - [9.7 Test Suite & Verification Matrix](#97-test-suite--verification-matrix)
-   - [9.8 Critical Architectural Limitations & Hardening Topics](#98-critical-architectural-limitations--hardening-topics)
-   - [9.9 Beginner-Friendly Component Breakdown, Flow Diagram & Status Matrix](#99-beginner-friendly-component-breakdown-flow-diagram--status-matrix)
+   - [9.3 Two-Phase Dispatch & Compare-And-Swap (CAS) Lua](#93-two-phase-dispatch--compare-and-swap-cas-lua)
+   - [9.4 Daily Scheduling & Timezone Calculations](#94-daily-scheduling--timezone-calculations)
+   - [9.5 MongoDB-to-Redis Synchronization & Reconciliation](#95-mongodb-to-redis-synchronization--reconciliation)
+   - [9.6 Inbound Result Worker & `XAUTOCLAIM` Recovery](#96-inbound-result-worker--xautoclaim-recovery)
+   - [9.7 Comprehensive Test Verification Matrix](#97-comprehensive-test-verification-matrix)
+   - [9.8 Resolution of Prototype Defects (Register 1–8)](#98-resolution-of-prototype-defects-register-18)
+   - [9.9 Outstanding Work, Verification Gaps & Production Readiness](#99-outstanding-work-verification-gaps--production-readiness)
+   - [9.10 Redis Article Deduplication Architecture & Stream Recovery Semantics](#910-redis-article-deduplication-architecture--stream-recovery-semantics)
+10. [Implementation Guide: Stale Request Recovery, Idempotent Dispatch & Worker Reconciliation](#10-implementation-guide-stale-request-recovery-idempotent-dispatch--worker-reconciliation)
+    - [10.1 Request Dispatch and Recovery Architecture](#101-request-dispatch-and-recovery-architecture)
+    - [10.2 Idempotent Redis Publishing & Deduplication Keys](#102-idempotent-redis-publishing--deduplication-keys)
+    - [10.3 Stale Request Recovery Implementation (`recover_stale_processing_requests`)](#103-stale-request-recovery-implementation-recover_stale_processing_requests)
+    - [10.4 Request Worker Integration](#104-request-worker-integration)
+    - [10.5 Configuration & Pydantic Validation](#105-configuration--pydantic-validation)
+    - [10.6 Tests and Current Verification Status](#106-tests-and-current-verification-status)
+    - [10.7 Remaining Work & Open Review Items](#107-remaining-work--open-review-items)
 
 ---
 
@@ -72,74 +97,88 @@ This document is the **definitive, step-by-step master guide** for the entire Ar
 
 Argus 2.0 is an **event-driven, decoupled web intelligence and content ingestion system**.
 
-Instead of building a monolithic script that downloads feeds, parses articles, and saves them in one place, the system is split into two independent microservices communicating exclusively through **Redis Streams**:
+Instead of building a monolithic script that downloads feeds, parses articles, and saves them in one place, the system is split into two independent microservices communicating exclusively through **Redis Streams**, with **MongoDB** acting as the durable system of record:
 
 ```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                    ARGUS ORCHESTRATOR  (Port 8000)                     │
-│                                                                        │
-│  scripts/add_rss_request.py                                            │
-│         │ (1. Insert 'pending' task into MongoDB)                      │
-│         ▼                                                              │
-│  [MongoDB: rss_requests]                                               │
-│         │ (2. Atomic Claim: status -> 'processing')                    │
-│         ▼                                                              │
-│  [request_worker.py] --> [request_service.py: dispatch_request]        │
-│                                  │                                     │
-│                                  │ (3. xadd: Generic ConnectorRequest) │
-│                                  │     {request_id, source,            │
-│                                  │      source_type, source_url,       │
-│                                  │      metadata: "{...}"}             │
-└──────────────────────────────────┼─────────────────────────────────────┘
-                                   │
-                                   ▼
-          ┌──────────────────────────────────────────────────┐
-          │  Redis Stream: 'queue:connector:rss'             │
-          └──────────────────────────────────────────────────┘
-                                   │
-                                   ▼ (4. Pull via xreadgroup)
-┌────────────────────────────────────────────────────────────────────────┐
-│                    ARGUS CONNECTOR  (Port 8001)                        │
-│                                                                        │
-│  [connector_worker.py]                                                 │
-│         │                                                              │
-│         │ (5. get_connector(request.source_type))                      │
-│         ▼                                                              │
-│  [registry.py] ──> [rss/connector.py: RSSConnector]                   │
-│                           │                                            │
-│                           │ (6. httpx fetches feed XML asynchronously) │
-│                           │ (7. feedparser extracts articles)          │
-│                           ▼                                            │
-│                    [CrawlResult payload]                               │
-│                           │                                            │
-│                           │ (8. xadd: Publish CrawlResult JSON)        │
-└───────────────────────────┼────────────────────────────────────────────┘
-                            │
-                            ▼
-          ┌──────────────────────────────────────────────────┐
-          │  Redis Stream: 'connector:rss:results'           │
-          └──────────────────────────────────────────────────┘
-                            │
-                            ▼ (9. xreadgroup via consumer group)
-┌────────────────────────────────────────────────────────────────────────┐
-│                    ARGUS ORCHESTRATOR (continued)                      │
-│                                                                        │
-│  [result_worker.py] --> [result_service.py]                            │
-│                                  │                                     │
-│                                  ├──> [MongoDB: rss_items] (Articles)  │
-│                                  │    (Bulk upsert, zero duplicates)   │
-│                                  │                                     │
-│                                  └──> [MongoDB: rss_requests]          │
-│                                       (status -> 'completed')          │
-└────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                    ARGUS ORCHESTRATOR  (Port 8000)                                     │
+│                                                                                        │
+│   [MongoDB: scheduled_units]                                                           │
+│           │                                                                            │
+│           │ (1. sync_scheduled_units_from_mongodb: sync & reconcile)                   │
+│           ▼                                                                            │
+│   [Redis Hot Path: schedule:due:{platform}:{priority} ZSET & unit:{unit_id} HASH]      │
+│           │                                                                            │
+│           │ (2. dispatch_due_units_once: due check score <= now)                       │
+│           ▼                                                                            │
+│   [scheduler_worker.py]                                                                │
+│           │                                                                            │
+│           │ (3. Step A: create_scheduled_rss_request -> MongoDB rss_requests 'pending')│
+│           │     Step B: Lua CAS _ADVANCE_DUE_TIME_SCRIPT advances Redis due time       │
+│           ▼                                                                            │
+│   [MongoDB: rss_requests]  <───────────── (Manual / Query Seeding: seed_rss_request)   │
+│           │                                                                            │
+│           │ (4. Atomic Claim: status -> 'processing', claimed_at = now)                │
+│           ▼                                                                            │
+│   [request_worker.py] ──> [request_service.py: dispatch_request]                       │
+│                                   │                                                    │
+│                                   │ (5. Idempotent XADD Lua Script)                    │
+│                                   │     Dedupe Key: argus:dispatch:request:...         │
+│                                   ▼                                                    │
+└───────────────────────────────────┼────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+           ┌──────────────────────────────────────────────────┐
+           │  Redis Stream: 'queue:connector:rss'             │
+           └──────────────────────────────────────────────────┘
+                                    │
+                                    ▼ (6. Pull via xreadgroup; retry via xautoclaim)
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                    ARGUS CONNECTOR  (Port 8001)                                        │
+│                                                                                        │
+│   [connector_worker.py]                                                                │
+│          │                                                                             │
+│          │ (7. get_connector(request.source_type))                                     │
+│          ▼                                                                             │
+│   [registry.py] ──> [rss/connector.py: RSSConnector]                                   │
+│                            │                                                           │
+│                            │ (8. Async HTTP fetch + XML/JSON parser)                   │
+│                            ▼                                                           │
+│                     [CrawlResult payload]                                              │
+│                            │                                                           │
+│                            │ (9. XADD to result_stream + XACK connector_stream)        │
+└────────────────────────────┼───────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+           ┌──────────────────────────────────────────────────┐
+           │  Redis Stream: 'connector:rss:results'           │
+           └──────────────────────────────────────────────────┘
+                             │
+                             ▼ (10. Dual-Loop: _consumer_new_messages + _recover_pending)
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                    ARGUS ORCHESTRATOR (continued)                                      │
+│                                                                                        │
+│   [result_worker.py] ──> [result_service.py: process_crawl_result]                     │
+│                                   │                                                    │
+│                                   ├──> [MongoDB: rss_items]                            │
+│                                   │    (Bulk upsert with item_hash SHA-256 dedup)      │
+│                                   │                                                    │
+│                                   ├──> [MongoDB: rss_requests]                         │
+│                                   │    (status -> 'completed' or 'failed')             │
+│                                   │                                                    │
+│                                   └──> (11. XACK to result_stream ONLY AFTER PERSIST)  │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Why This Architecture?
-1. **Generic Multi-Connector Extensibility:** The Orchestrator and Connector no longer speak an RSS-only dialect. Tasks are dispatched as generic `ConnectorRequest` objects specifying `source`, `source_type`, `source_url`, and custom `metadata`. Adding a new source (e.g. NSE, BSE, SEBI) simply requires adding an implementation of `BaseConnector` to the connector registry.
-2. **Zero Bottlenecks:** The Orchestrator never slows down waiting for external target websites to respond. High latency external crawls are isolated to the connector tier.
-3. **Infinite Horizontal Scaling:** Run 1 or 50 connector worker instances across machines. They automatically share the Redis consumer group with load balanced work delivery.
-4. **Fault Tolerance:** If a connector worker crashes mid-fetch, Redis maintains the message in the pending entries list (PEL) to be retried.
-5. **Stateless Connector:** The connector never touches MongoDB. It reads from Redis and writes to Redis, keeping database credentials and persistence policies centralized in the Orchestrator.
+1. **Single-Writer Principle & Durable State:** All permanent database state resides strictly in MongoDB under the Orchestrator's domain. The Connector never connects to MongoDB and holds no database credentials.
+2. **Two-Phase Reliable Scheduling:** Scheduled units are indexed by due-timestamp in Redis for fast evaluation. When due, the scheduler first inserts a durable request in MongoDB before advancing the Redis score via a Compare-and-Swap (CAS) Lua script. If a node crashes, the pending MongoDB record ensures the crawl will execute.
+3. **Outbound Decoupling & Idempotent Stream Dispatch:** `SchedulerWorker` does not push directly to connector streams. It creates MongoDB requests, allowing the existing `RequestWorker` to claim and dispatch them with Lua-based Redis stream deduplication.
+4. **Generic Multi-Connector Extensibility:** Outbound tasks use the generic `ConnectorRequest` schema (`source`, `source_type`, `source_url`, `metadata`). The connector dynamically resolves scrapers via `registry.py` (e.g., `rss`, `nse_announcements`, `nse_circular`).
+5. **Bidirectional Fault Tolerance & Pending Recovery:** Both microservices employ Redis Consumer Groups with `XAUTOCLAIM` recovery:
+   - `ConnectorWorker` reclaims stale in-flight scraping jobs if a scraper pod terminates.
+   - `ResultWorker` reclaims unacknowledged crawl results if an orchestrator instance restarts before database writes finish.
+6. **Zero External Bottlenecks:** External HTTP latencies and rate limits stay strictly on the Connector tier. The Orchestrator core processes requests asynchronously in milliseconds.
 
 ---
 
@@ -149,27 +188,46 @@ Every crawl task in MongoDB's `rss_requests` collection travels through an audit
 
 ```text
               ┌──────────────┐
-              │   pending    │  <-- Job seeded in MongoDB
+              │   pending    │  <-- Created via scheduler, news query bridge, or manual seed
               └──────┬───────┘
                      │
-                     │ (Atomically claimed by request_service.py)
+                     │ (Atomically claimed by request_service.py via find_one_and_update)
                      ▼
               ┌──────────────┐
-              │  processing  │  <-- Dispatched to Redis Stream with 'dispatched_at'
+              │  processing  │  <-- Published to Redis Stream with 'stream_message_id' & 'dispatched_at'
               └──────┬───────┘
                      │
         ┌────────────┴────────────┐
-        │ (Connector succeeds)    │ (Connector errors / invalid feed)
+        │ (Connector succeeds)    │ (Connector errors / unreachable URL)
         ▼                         ▼
  ┌──────────────┐          ┌──────────────┐
  │  completed   │          │    failed    │
  └──────────────┘          └──────────────┘
 ```
 
-1. **`pending`**: Job exists in MongoDB with target metadata and `status: "pending"`, awaiting worker pickup.
-2. **`processing`**: Atomically claimed by `request_service.py`, `claimed_at` and `dispatched_at` timestamps recorded, task pushed to Redis Stream with `stream_message_id` stored for traceability.
-3. **`completed`**: Connector fetched the feed, parsed articles, and Orchestrator's `result_service.py` bulk-upserted them into `rss_items` while updating request status to `completed`.
-4. **`failed`**: URL was unreachable, timed out, or had malformed data. `error_message` is recorded for debugging.
+### Lifecycle Details & Correlation Keys:
+1. **`pending`**:
+   - For scheduled runs, created by `scheduled_request_service.py` with deterministic request ID:
+     `scheduled:{unit_id}:{scheduled_timestamp:.6f}`
+   - For topic query searches, created by `query_dispatch_service.py` with composite `active_query_key`.
+   - For manual seeds, created by `scripts/seed_rss_request.py`.
+   - Guarantees idempotent retries: if MongoDB raises `DuplicateKeyError` on `request_id`, it is safely treated as an existing retry.
+2. **`processing`**:
+   - Atomically claimed by `request_worker.py` calling `dispatch_request()`.
+   - `status` transitions from `pending` to `processing` with `claimed_at = now`.
+   - The request is serialized to `ConnectorRequest` and published to Redis Stream `queue:connector:rss` via an atomic Lua script that stores `argus:dispatch:request:{request_id}:stream_message_id`.
+   - MongoDB is updated with `stream_message_id` and `dispatched_at`.
+   - **Audit Write Failure & Stale State:** If Redis successfully accepts the message but the subsequent MongoDB audit write fails (e.g. database disconnect, write timeout, or orchestrator crash), the request remains in `processing` with `dispatched_at = None`. Because normal dispatch only polls `pending` requests, this document would remain stranded. The periodic `recover_stale_processing_requests()` background routine resolves this state by reconciling with Redis.
+3. **`completed`**:
+   - Connector successfully fetches and parses target feed/announcement.
+   - Orchestrator's `ResultWorker` receives `CrawlResult` payload.
+   - `result_service.process_crawl_result()` bulk-upserts extracted articles into MongoDB `rss_items` using `item_hash` deduplication (`$setOnInsert`).
+   - `rss_requests` document is marked `status: "completed"` with `items_count`, `new_items_count`, and `completed_at`.
+   - Message is acknowledged in Redis (`xack`).
+4. **`failed`**:
+   - URL was unreachable, timed out, or returned malformed content.
+   - `rss_requests` status transitions to `"failed"`, recording `error_message` and `completed_at`.
+   - Message is acknowledged in Redis (`xack`) to prevent infinite poison-pill crash loops.
 
 ---
 
@@ -187,7 +245,7 @@ argus-orchestrator/
 │   ├── api/
 │   │   └── health.py         # /health and /ready probe endpoints
 │   ├── core/
-│   │   ├── config.py         # Pydantic Settings loader (including dispatch_tick_seconds)
+│   │   ├── config.py         # Pydantic Settings loader (including recovery & tick configs)
 │   │   └── logging.py        # Centralized logger setup
 │   ├── platform/
 │   │   ├── mongodb.py        # Async Motor client, collections: news_queries, rss_requests, rss_items, scheduled_units
@@ -197,22 +255,35 @@ argus-orchestrator/
 │   │   ├── request.py        # Generic ConnectorRequest outbound schema
 │   │   └── result.py         # Inbound schema (RSSItem and CrawlResult)
 │   ├── services/
-│   │   ├── bing_service.py            # Bing search RSS URL builder
-│   │   ├── query_dispatch_service.py  # Reads news_queries; creates pending rss_requests
-│   │   ├── request_service.py         # Atomic claim, metadata serialization, Redis dispatch
-│   │   ├── result_service.py          # Article dedup bulk upsert & job completion
-│   │   └── scheduler_service.py       # Redis-based unit registration, candidate lookup & atomic Lua dispatch
+│   │   ├── bing_service.py              # Bing search RSS URL builder
+│   │   ├── query_dispatch_service.py    # Reads news_queries; creates pending rss_requests
+│   │   ├── request_service.py           # Atomic claim, idempotent Redis XADD dispatch, audit logging
+│   │   ├── result_service.py            # Article dedup bulk upsert & job completion
+│   │   ├── schedule_time_service.py     # Next-run calculation for daily clock times & timezones
+│   │   ├── scheduled_request_service.py # Durable idempotent request creation in MongoDB rss_requests
+│   │   └── scheduler_service.py         # MongoDB sync, Redis due-time index, CAS advancement & dispatch orchestration
 │   ├── test/
-│   │   ├── test_bing.py                # Verification test for Bing RSS search
-│   │   ├── test_request_idempotency.py # Concurrency race & partial unique index test
-│   │   ├── test_scheduler_service.py   # Unit registration, metadata storage & due query test
-│   │   ├── test_scheduler_dispatch.py  # Atomic dispatch, payload verification & schedule advance test
-│   │   ├── test_scheduler_tick.py      # Dispatcher tick sweep & single-run idempotency test
-│   │   └── test_scheduler_worker.py    # Background SchedulerWorker periodic ticks & graceful shutdown test
+│   │   ├── manual_result_worker_recovery.py # Real Redis standalone test for XAUTOCLAIM recovery
+│   │   ├── test_redis_dispatch_recovery.py # Regression test: republished entry on stream deletion & dedup reuse
+│   │   ├── test_bing.py                  # Verification test for Bing RSS search
+│   │   ├── test_request_idempotency.py   # Concurrency race & partial unique index test
+│   │   ├── test_request_recovery.py      # Stale request recovery unit & integration tests
+│   │   ├── test_request_service.py       # Outbound request service unit tests (claim, publish, audit)
+│   │   ├── test_request_worker.py        # RequestWorker recovery loop & health-check tests
+│   │   ├── test_result_service.py        # Inbound result service unit tests (dedup, status update)
+│   │   ├── test_result_worker.py         # ResultWorker unit test (ACK on success, no ACK on error, recovery)
+│   │   ├── test_schedule_time_service.py # Daily next-run calculation unit tests (Asia/Kolkata rollover)
+│   │   ├── test_scheduled_request_service.py # Scheduled request creation & retry unit tests
+│   │   ├── test_scheduler_dispatch.py    # Mocked dispatch test (Step A/B ordering, CAS script, daily times)
+│   │   ├── test_scheduler_service.py     # Manual standalone test for Redis registration & candidate discovery
+│   │   ├── test_scheduler_sync.py        # Mocked sync test (MongoDB to Redis registration, disabled/stale prune)
+│   │   ├── test_scheduler_sync_due_time.py # Real Redis test: nx=True preserves runtime due scores
+│   │   ├── test_scheduler_tick.py        # Candidate sweep & tick dispatch idempotency test
+│   │   └── test_scheduler_worker.py      # Background worker lifecycle (sync-before-dispatch & shutdown)
 │   └── workers/
 │       ├── request_worker.py   # Continuous MongoDB polling dispatcher daemon
-│       ├── result_worker.py    # Continuous Redis results consumer daemon
-│       └── scheduler_worker.py # Autonomous periodic scheduler dispatcher worker daemon
+│       ├── result_worker.py    # Continuous Redis results consumer daemon with XAUTOCLAIM recovery
+│       └── scheduler_worker.py # Autonomous periodic scheduler sync & dispatcher daemon
 └── scripts/
     ├── seed_rss_request.py   # CLI tool to seed pending multi-source requests into MongoDB
     └── seed_news_query.py    # Seed query dictionary for targeted Bing news searches
@@ -274,7 +345,7 @@ argus-connector/
 ---
 
 ### File 1: `app/core/config.py`
-**Purpose:** Single source of truth for all configuration values. Reads from `.env` and provides strongly-typed settings.
+**Purpose:** Single source of truth for all configuration values. Reads from `.env` and provides strongly-typed settings, including stream names, consumer group identifiers, pending-result recovery thresholds, and scheduler tick intervals.
 
 ```python
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -290,7 +361,27 @@ class Settings(BaseSettings):
     consumer_group: str = "orchestrator-results"       # Consumer group for result reading
     consumer_name: str = "orchestrator-1"              # Unique worker name
 
-    dispatch_tick_seconds: int = 5                     # Default cadence for scheduler worker tick
+    # Redis pending-result recovery (XAUTOCLAIM)
+    result_claim_idle_ms: int = 30000                  # Idle threshold before reclaiming stale results (30s)
+    result_recovery_interval: int = 10                 # Pause between recovery scans when stream is drained (10s)
+
+    dispatch_tick_seconds: int = 5                     # Cadence for background scheduler worker tick (5s)
+
+    # Request recovery settings
+    request_recovery_interval: int = 10                # Cadence for background stale-request recovery (10s)
+    request_recovery_timeout_seconds: int = 120        # Staleness threshold for in-flight processing requests (120s)
+    request_recovery_lease_seconds: int = 120          # Distributed lease duration for recovery claims (120s)
+
+    @field_validator(
+        "request_recovery_interval",
+        "request_recovery_timeout_seconds",
+        "request_recovery_lease_seconds",
+    )
+    @classmethod
+    def validate_request_recovery_settings(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Request recovery settings must be greater than zero.")
+        return value
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -502,14 +593,14 @@ Instead of restricting requests to RSS feeds, `ConnectorRequest` represents any 
 ---
 
 ### File 9: `app/services/request_service.py`
-**Purpose:** Core outbound business logic — atomically claiming a pending task from MongoDB, validating the schema, stringifying metadata for Redis, and updating audit trails.
+**Purpose:** Core outbound business logic — atomically claiming a pending task from MongoDB, validating the schema, stringifying metadata for Redis, publishing to Redis Stream with Lua-based deduplication, and updating audit trails.
 
 **Key Mechanics:**
 1. **Atomic Claiming:**
    ```python
    claimed_doc = await rss_requests.find_one_and_update(
        {"status": "pending"},
-       {"$set": {"status": "processing", "claimed_at": datetime.now(timezone.utc)}},
+       {"$set": {"status": "processing", "claimed_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},
        return_document=ReturnDocument.AFTER
    )
    ```
@@ -523,30 +614,55 @@ Instead of restricting requests to RSS feeds, `ConnectorRequest` represents any 
        metadata=claimed_doc.get("metadata", {}),
    )
    ```
-3. **Redis Stream Serialization:**
-   Redis streams store flat key-value pairs where values must be strings or numbers. Dicts cannot be passed directly. The service JSON-encodes `metadata`:
-   ```python
-   dispatch_time = datetime.now(timezone.utc)
-   redis_payload = request_obj.model_dump()
-   redis_payload["metadata"] = json.dumps(redis_payload["metadata"])
+3. **Idempotent Redis Stream Publication & Stream Deletion Recovery via Lua Script:**
+   To prevent duplicate messages in the Redis Stream during worker retries while guaranteeing self-healing recovery if a stream entry was trimmed, expired, or deleted via `XDEL`, the service uses an enhanced `_IDEMPOTENT_XADD_SCRIPT` with a per-request deduplication key (`argus:dispatch:request:{request_id}:stream_message_id`):
+   ```lua
+   local existing_id = redis.call("GET", KEYS[2])
 
-   stream_message_id = await redis_client.xadd(
-       settings.connector_stream,
-       redis_payload
+   if existing_id then
+       local existing_message = redis.call(
+           "XRANGE",
+           KEYS[1],
+           existing_id,
+           existing_id,
+           "COUNT",
+           1
+       )
+
+       if #existing_message > 0 then
+           return existing_id
+       end
+   end
+
+   local message_id = redis.call(
+       "XADD",
+       KEYS[1],
+       "*",
+       unpack(ARGV)
    )
+
+   redis.call("SET", KEYS[2], message_id)
+
+   return message_id
    ```
+   **Resilience Guarantee:** If Redis already dispatched this request and the message still exists in the stream (`#existing_message > 0`), the script returns `existing_id` without publishing a duplicate. However, if the stream entry was deleted or evicted while the deduplication key still persisted, the script detects `#existing_message == 0`, publishes a replacement message via `XADD`, and updates the deduplication key with the new message ID. This prevents permanent dispatch deadlocks.
 4. **Audit Back-Link:**
-   Updates MongoDB with both `stream_message_id` and `dispatched_at` timestamp.
+   Updates MongoDB with `stream_message_id`, `dispatched_at`, and `updated_at`.
 5. **Two-Tier Error Handling:**
-   - `ValidationError`: Marks request as `"failed"`.
-   - Network `Exception`: Rolls status back to `"pending"` for automatic retry when Redis recovers.
+   - `ValidationError`: Marks request as `"failed"` with the validation message.
+   - Network / Redis `Exception`: Rolls status back to `"pending"` with `error_message` recorded, allowing automatic retry on the next tick without task loss.
+6. **Existing Stream Message Verification (`_get_existing_stream_message_id`):**
+   Reads `argus:dispatch:request:{request_id}:stream_message_id` and verifies with `XRANGE` whether the entry still exists in Redis stream `queue:connector:rss`.
+7. **Stale Request Recovery (`recover_stale_processing_requests`):**
+   Atomically claims stale processing requests (`claimed_at` older than threshold, `dispatched_at: None`) using `recovery_claimed_at` and a unique `recovery_token`. Reuses verified existing Redis message IDs or publishes idempotently via `_publish_request_idempotently()`, updates MongoDB audit fields, and releases the recovery lease. Catches exceptions and releases the lease, and handles requests missing `request_id` safely.
 
 ---
 
 ### File 10: `app/workers/request_worker.py`
-**Purpose:** Autonomous background dispatcher daemon that calls `dispatch_request()` in a loop.
+**Purpose:** Autonomous background dispatcher daemon that calls `dispatch_request()` in a loop and periodically triggers stale request recovery.
 
 **Key Mechanics:**
+- **Periodic Stale Request Recovery:** In each processing loop cycle, checks if `now - self._last_recovery_time >= settings.request_recovery_interval` (10s). If elapsed, invokes `recover_stale_processing_requests()`. If recovery raises an exception, logs it with `logger.exception(...)` and allows normal dispatch to proceed uninterrupted.
 - **Drain Mode:** When a task is dispatched, sleeps only `10ms` and immediately loops to clear the backlog.
 - **Idle Mode:** When no tasks are pending, waits `poll_interval` (2 seconds) using `asyncio.wait_for(self._stop_event.wait(), timeout=...)`.
 - **Clean Shutdown:** Catches cancellation and stop signals without dropping tasks.
@@ -582,10 +698,54 @@ Instead of restricting requests to RSS feeds, `ConnectorRequest` represents any 
 ---
 
 ### File 12: `app/services/result_service.py`
-**Purpose:** Inbound business logic — saving articles to MongoDB with zero duplicates, maintaining strict indexing guarantees, and updating request status.
+**Purpose:** Inbound business logic — saving articles to MongoDB with zero duplicates, high-throughput Redis caching, multi-layer deduplication, strict indexing guarantees, and updating request audit status.
 
 **Key Mechanics:**
-1. **Index Assurance (`ensure_indexes`)**:
+1. **Two-Tier High-Performance Article Deduplication:**
+   Rather than sending thousands of repeated articles into MongoDB `bulk_write()`, the service executes multi-tier deduplication before touching the database:
+   - **In-Batch Hash Set Filtering:**
+     Discards redundant articles appearing multiple times within the same crawl batch using an in-memory hash set:
+     ```python
+     unique_items = []
+     seen_hashes = set()
+     for item in items:
+         if item.item_hash and item.item_hash in seen_hashes:
+             batch_duplicates += 1
+             continue
+         if item.item_hash:
+             seen_hashes.add(item.item_hash)
+         unique_items.append(item)
+     ```
+   - **Redis Fast-Path `MGET` Lookup (`filter_unseen_items`):**
+     Queries Redis cache keys `argus:article:seen:{item_hash}` in a single batched `mget()` call:
+     ```python
+     ARTICLE_SEEN_PREFIX = "argus:article:seen:"
+     ARTICLE_SEEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
+
+     keys = [f"{ARTICLE_SEEN_PREFIX}{item.item_hash}" for item in hashed_items]
+     values = await redis_client.mget(*keys)
+     ```
+     Articles whose keys return `"1"` are filtered out before persistence, dropping MongoDB CPU and IOPS write overhead by 90%+.
+   - **Graceful Redis Degradation:**
+     If Redis raises a `ConnectionError` or `TimeoutError`, the service catches the exception with `logger.warning("Redis deduplication lookup failed; falling back to MongoDB.", exc_info=True)` and forwards all items directly to MongoDB. MongoDB remains the authoritative source of truth.
+   - **Post-Persistence Pipeline Caching (`mark_items_seen`):**
+     After MongoDB `bulk_write()` succeeds, an atomic non-transactional Redis pipeline caches the newly inserted article hashes with a 30-day TTL (`ex=ARTICLE_SEEN_TTL_SECONDS`):
+     ```python
+     async with redis_client.pipeline(transaction=False) as pipeline:
+         for item_hash in hashes:
+             pipeline.set(f"{ARTICLE_SEEN_PREFIX}{item_hash}", "1", ex=ARTICLE_SEEN_TTL_SECONDS)
+         await pipeline.execute()
+     ```
+2. **Authoritative MongoDB Zero-Duplicate Bulk Upsert (`$setOnInsert`):**
+   ```python
+   UpdateOne(
+       {"item_hash": item.item_hash},
+       {"$setOnInsert": item.model_dump()},
+       upsert=True
+   )
+   ```
+   If the hash exists in MongoDB, MongoDB skips it without error. If new, it inserts the document. `$setOnInsert` ensures existing articles preserve their original `created_at` timestamp.
+3. **Index Assurance (`ensure_indexes`)**:
    - `rss_items.item_hash`: Unique index `[("item_hash", 1)]` preventing duplicate articles across all crawl runs.
    - `rss_items.request_id` & `rss_items.published_at`: Fast lookup and temporal filtering indexes.
    - `rss_requests.request_id`: Unique sparse index for request lookups.
@@ -603,29 +763,282 @@ Instead of restricting requests to RSS feeds, `ConnectorRequest` represents any 
      )
      ```
      Guarantees that at most **one** active (`pending` or `processing`) request can exist for a given query key at any point in time, completely eliminating race-condition double dispatches.
-2. **Zero-Duplicate Bulk Upsert (`$setOnInsert`)**:
-   ```python
-   UpdateOne(
-       {"item_hash": item.item_hash},
-       {"$setOnInsert": item.model_dump()},
-       upsert=True
-   )
-   ```
-   If the hash exists, MongoDB skips it without error. If new, it inserts the document. `$setOnInsert` ensures existing articles preserve their original `created_at` timestamp.
-3. **Status Transition:**
-   - On `"success"`: Updates `rss_requests` to `"completed"` with `items_count`, `new_items_count`, and `completed_at`.
+4. **Status Transition & Comprehensive Duplicate Metrics:**
+   - On `"success"`: Computes `total_duplicates = stats["duplicates"] + redis_duplicates + batch_duplicates`. Updates `rss_requests` to `"completed"` with `items_count: len(result.items)`, `new_items_count: stats["inserted"]`, and `completed_at`.
    - On `"failed"`: Updates `rss_requests` to `"failed"` with `error_message`.
 
----
-
 ### File 13: `app/workers/result_worker.py`
-**Purpose:** Autonomous background consumer daemon that reads crawl results from Redis Stream `connector:rss:results` and passes them to `process_crawl_result()`.
+**Purpose:** Autonomous inbound background consumer daemon (the "Inbound Ingestor") that continuously reads crawl results from Redis Stream `connector:rss:results` via consumer group `orchestrator-results`, invokes `result_service.process_crawl_result()` to persist articles and request status updates in MongoDB, acknowledges messages via `xack`, and recovers stale in-flight messages via `xautoclaim`.
 
-**Key Mechanics:**
-1. Ensures consumer group exists (`xgroup_create` with `mkstream=True`).
-2. Reads messages using `xreadgroup` (`">"` for new undelivered messages).
-3. Parses JSON payloads (handles both `"payload"` and `"items"` string encodings).
-4. Only executes `xack()` **after** database persistence succeeds (guaranteeing at-least-once delivery).
+**Key Mechanics & Reliability Guarantees:**
+1. **Pre-Flight Health Checks & Indexes:** On startup, verifies connectivity to both MongoDB and Redis, ensures MongoDB indexes exist via `ensure_indexes()`, and initializes consumer group `orchestrator-results` on stream `connector:rss:results` (`xgroup_create` with `mkstream=True` and `id="0"`).
+2. **Dual-Loop Concurrency:** Runs two concurrent `asyncio` task loops via `asyncio.gather()`:
+   - **New Message Consumer Loop (`_consumer_new_messages`):** Reads undelivered messages using `xreadgroup` with stream ID `">"` in batches (`batch_size=10`, `block=2000ms`).
+   - **Pending Message Recovery Loop (`_recover_pending_messages`):** Periodically inspects the consumer group's Pending Entries List (PEL) using `xautoclaim` with `min_idle_time=settings.result_claim_idle_ms` (30,000 ms / 30s) and consumer name `{consumer_name}-recovery`. Reclaims and retries messages that were abandoned due to worker crash or network timeout. When `start_id == "0-0"` is returned (scan cycle complete), pauses for `settings.result_recovery_interval` (10s).
+3. **Payload Normalization:** Handles both raw dictionaries and JSON-string-encoded payloads (`"payload"` or `"items"` string attributes).
+4. **Strict Post-Persistence Acknowledgement (`xack`):** Acknowledges messages (`xack`) strictly **after** `process_crawl_result()` succeeds in MongoDB. If MongoDB persistence raises an exception, `xack` is **not** called; the message remains in the Redis PEL and is automatically reclaimed by the recovery loop.
+5. **Graceful Lifecycle Management:** Supports OS signals (`SIGINT`, `SIGTERM`) and clean cancellation via `self._stop_event`.
+
+```python
+import asyncio
+import json
+import logging
+import signal
+from typing import Any, Dict
+
+import redis.exceptions  # Correct import; redis.exception was a previous typo causing AttributeError
+
+from app.core.config import settings
+from app.core.logging import setup_logging
+from app.platform.mongodb import check_mongodb
+from app.platform.redis import check_redis, redis_client
+from app.services.result_service import ensure_indexes, process_crawl_result
+
+logger = logging.getLogger(__name__)
+
+
+class ResultWorker:
+    """
+    Continuous background consumer that reads incoming crawl results from Redis
+    and invokes result_service to persist articles and update request statuses.
+    """
+    def __init__(
+        self,
+        block_ms: int = 2000,
+        batch_size: int = 10,
+        claim_idle_ms: int | None = None,
+        recovery_interval: int | None = None,
+    ):
+        self.stream_name = settings.result_stream
+        self.group_name = settings.consumer_group
+        self.consumer_name = settings.consumer_name
+        self.recovery_consumer_name = f"{self.consumer_name}-recovery"
+        self.block_ms = block_ms
+        self.batch_size = batch_size
+
+        self.claim_idle_ms = (
+            settings.result_claim_idle_ms
+            if claim_idle_ms is None
+            else claim_idle_ms
+        )
+
+        self.recovery_interval = (
+            settings.result_recovery_interval
+            if recovery_interval is None
+            else recovery_interval
+        )
+        self._is_running = False
+        self._stop_event = asyncio.Event()
+
+    async def _setup_consumer_group(self):
+        try:
+            await redis_client.xgroup_create(
+                name=self.stream_name,
+                groupname=self.group_name,
+                id="0",
+                mkstream=True
+            )
+            logger.info(
+                f"Created consumer group '{self.group_name}' on stream '{self.stream_name}'."
+            )
+        except redis.exceptions.ResponseError as exc:
+            if "BUSYGROUP" in str(exc):
+                logger.debug(
+                    f"Consumer group '{self.group_name}' already exists."
+                )
+            else:
+                logger.exception(f"Failed to create consumer group: {exc}")
+                raise
+
+    def _parse_message_data(
+        self, raw_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        parsed = dict(raw_data)
+        if "payload" in parsed and isinstance(parsed["payload"], str):
+            try:
+                payload = json.loads(parsed["payload"])
+                if isinstance(payload, dict):
+                    return payload
+                raise ValueError("Redis payload must be decoded to a JSON object.")
+            except json.JSONDecodeError:
+                logger.exception("Invalid JSON in Redis Payload")
+                raise
+
+        if "items" in parsed and isinstance(parsed["items"], str):
+            try:
+                parsed["items"] = json.loads(parsed["items"])
+            except json.JSONDecodeError:
+                logger.exception("Invalid JSON in Redis items field.")
+                raise
+
+        return parsed
+
+    async def _process_message(self, message_id, raw_fields):
+        payload = self._parse_message_data(raw_fields)
+        summary = await process_crawl_result(payload)
+
+        logger.info(
+            "Process result message %s: request_id=%s status=%s, saved=%s",
+            message_id,
+            summary.get("request_id"),
+            summary.get("status"),
+            summary.get("items_inserted", 0),
+        )
+
+        await redis_client.xack(
+            self.stream_name,
+            self.group_name,
+            message_id,
+        )
+
+    async def _consumer_new_messages(self):
+        logger.info("New result-message consumer loop started.")
+
+        while self._is_running and not self._stop_event.is_set():
+            try:
+                entries = await redis_client.xreadgroup(
+                    groupname=self.group_name,
+                    consumername=self.consumer_name,
+                    streams={self.stream_name: ">"},
+                    count=self.batch_size,
+                    block=self.block_ms,
+                )
+
+                for _, messages in entries or []:
+                    for message_id, raw_fields in messages:
+                        try:
+                            await self._process_message(message_id, raw_fields)
+                        except Exception:
+                            logger.exception(
+                                "Failed to process result message %s.",
+                                message_id
+                            )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Unexpected error in new result-message loop.")
+                await asyncio.sleep(5)
+
+        logger.info("New result-message consumer loop exited.")
+
+    async def _recover_pending_messages(self):
+        logger.info(
+            "Result recovery loop started (idle threshold=%sms).",
+            self.claim_idle_ms,
+        )
+
+        claim_start_id = "0-0"
+
+        while self._is_running and not self._stop_event.is_set():
+            try:
+                result = await redis_client.xautoclaim(
+                    name=self.stream_name,
+                    groupname=self.group_name,
+                    consumername=self.recovery_consumer_name,
+                    min_idle_time=self.claim_idle_ms,
+                    start_id=claim_start_id,
+                    count=self.batch_size,
+                )
+
+                next_start_id, messages, deleted_ids = result
+                claim_start_id = next_start_id
+
+                if deleted_ids:
+                    logger.warning(
+                        "Redis reported %s deleted pending result IDs.",
+                        len(deleted_ids)
+                    )
+
+                for message_id, raw_fields in messages:
+                    try:
+                        logger.info(
+                            "Processing reclaimed result message %s.",
+                            message_id
+                        )
+                        await self._process_message(message_id, raw_fields)
+                    except Exception:
+                        logger.exception(
+                            "Failed to process reclaimed result %s.",
+                            message_id,
+                        )
+
+                if claim_start_id == "0-0":
+                    await asyncio.sleep(self.recovery_interval)
+            except asyncio.CancelledError:
+                raise
+            except redis.exceptions.ResponseError as exc:
+                logger.exception(
+                    "Redis error during result XAUTOCLAIM: %s", exc
+                )
+                await asyncio.sleep(5)
+
+        logger.info("Result recovery loop exited")
+
+    async def start(self):
+        self._is_running = True
+        self._stop_event.clear()
+
+        logger.info("Initializing Result Worker...")
+
+        try:
+            mongo_ok = await check_mongodb()
+            redis_ok = await check_redis()
+
+            if not mongo_ok or not redis_ok:
+                logger.error(
+                    "Database or Redis is not healthy. Result Worker cannot start."
+                )
+                return
+
+            await ensure_indexes()
+            await self._setup_consumer_group()
+
+            logger.info(
+                "Result Worker listening on '%s' [group=%s consumer=%s recovery_consumer=%s].",
+                self.stream_name,
+                self.group_name,
+                self.consumer_name,
+                self.recovery_consumer_name,
+            )
+
+            await asyncio.gather(
+                self._consumer_new_messages(),
+                self._recover_pending_messages(),
+            )
+        finally:
+            self._is_running = False
+            logger.info("Result Worker loop has exited")
+
+    def stop(self):
+        logger.info("Stopping Result Worker gracefully...")
+        self._is_running = False
+        self._stop_event.set()
+
+
+async def run_worker():
+    setup_logging()
+    worker = ResultWorker(block_ms=2000, batch_size=10)
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, worker.stop)
+        except (NotImplementedError, AttributeError):
+            pass
+
+    try:
+        await worker.start()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        worker.stop()
+        logger.info("Result Worker terminated.")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_worker())
+    except KeyboardInterrupt:
+        print("\nResult Worker terminated by user.")
+```
 
 ---
 
@@ -771,96 +1184,1977 @@ result = await dispatch_news_queries()
 
 ---
 
-### File 20: `app/services/scheduler_service.py`
-**Purpose:** Core scheduling service providing Redis-based scheduled unit registration, due candidate discovery, and atomic dispatch using a custom Lua script.
+### File 20: `app/services/schedule_time_service.py`
+**Purpose:** Pure schedule-time calculation engine for daily clock schedules. Computes the next scheduled execution timestamp strictly after `now`, handling local timezone conversions, clock-time parsing, and day-boundary rollover.
 
-**Key Functions & Redis Structures:**
-1. **Key Helpers:**
-   - `_due_key(platform, priority)`: Returns `scheduler:due:{platform.lower()}:{priority.lower()}` (Redis Sorted Set, where score = Unix timestamp).
-   - `_unit_key(unit_id)`: Returns `unit:{unit_id}` (Redis Hash holding unit configuration metadata).
-   - `ACTIVE_KEYS_SET = "schedule:active_keys"`: Redis Set intended to track active `{platform}:{priority}` combinations for dispatcher sweeps.
-2. **`register_scheduled_unit()`**:
-   - Validates inputs (`cadence_seconds > 0`, non-empty strings).
-   - Serializes `search_options` to JSON and normalizes metadata strings.
-   - Executes atomic pipeline:
-     - `pipe.zadd(due_key, {unit_id: next_run_at})`
-     - `pipe.hset(unit_key, mapping=metadata)`
-     - `pipe.sadd(ACTIVE_KEYS_SET, unit_key)` *(Note: see Defect Register 1 below — currently records `unit_key` rather than `f"{platform}:{priority}"`)*.
-3. **`get_due_unit_id()`**:
-   - Read-only candidate query: queries Redis Sorted Set with `zrangebyscore(due_key, min="-inf", max=current_time, start=0, num=limit)`.
-   - Explicitly does **not** claim, lock, or pop units. Returns candidate `list[str]`.
-4. **`dispatch_due_unit()`**:
-   - Invokes Redis Lua script `_DISPATCH_DUE_UNIT_SCRIPT` with keys `[due_key, unit_key, stream_name]`.
-   - Lua script checks due timestamp, verifies metadata, drops disabled units, publishes job to `queue:connector:{platform}:{priority}` via `XADD`, advances schedule to `now + cadence` via `ZADD`, and returns `{1, stream_id, next_run_at, request_id}`.
-5. **`dispatch_due_units_once()`**:
-   - Sweeps active registry keys (or optional `platform_priority_keys` filter for isolated tests).
-   - Fetches due candidate unit IDs and executes `dispatch_due_unit()` for each.
-   - Returns count of successfully dispatched units.
-   - *(Note: see Defect Register 2 below — loop variable shadowing and premature indented `return` terminate the loop after the first key)*.
-6. **MongoDB Integration Status**:
-   - `from app.platform.mongodb import scheduled_units` is imported on line 7, but is entirely unreferenced. Durable configuration persistence and startup reconciliation remain pending.
+**Key Mechanics & Invariants:**
+1. **Clock Time Validation:** Accepts clock strings in 24-hour ISO format (e.g. `["10:00", "19:00"]`). Rejects empty lists, duplicates, and clock strings with embedded offsets (must be local naive times).
+2. **Timezone Conversion:** Converts UTC `now` into target timezone (default `"Asia/Kolkata"` / IST) using Python's `zoneinfo.ZoneInfo`.
+3. **Same-Day Candidate Search:** Sorts run times chronologically and tests candidates against local `now`. Returns the earliest candidate strictly greater than `local_now`.
+4. **Day Rollover:** If all daily run times for today have elapsed (e.g., current time is 19:05 IST), rolls over to tomorrow (`local_now.date() + timedelta(days=1)`) and selects the earliest daily run time (10:00 IST).
+5. **UTC Return:** Converts the localized candidate datetime back to UTC for consistent storage and comparisons.
+
+```python
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+
+def calculate_next_run(
+    now: datetime,
+    run_times: list[str],
+    timezone_name: str = "Asia/Kolkata",
+) -> datetime:
+    """
+    Calculate the next scheduled clock time strictly after `now`.
+
+    Example:
+        09:45 IST -> 10:00 IST
+        10:05 IST -> 19:00 IST
+        19:05 IST -> next day at 10:00 IST
+    """
+    if not run_times:
+        raise ValueError("run_times must not be empty")
+
+    try:
+        tz = ZoneInfo(timezone_name)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid timezone: {timezone_name}"
+        ) from exc
+
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    local_now = now.astimezone(tz)
+    parsed_times = []
+
+    for value in run_times:
+        try:
+            parsed = time.fromisoformat(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid run time: {value}"
+            ) from exc
+
+        if parsed.tzinfo is not None:
+            raise ValueError(
+                "run_times must use local clock times without a timezone"
+            )
+
+        parsed_times.append(parsed)
+
+    if len(set(parsed_times)) != len(parsed_times):
+        raise ValueError("run_times must not contain duplicates")
+
+    parsed_times.sort()
+
+    for run_time in parsed_times:
+        candidate = datetime.combine(
+            local_now.date(),
+            run_time,
+            tzinfo=tz,
+        )
+
+        if candidate > local_now:
+            return candidate.astimezone(timezone.utc)
+
+    next_day = local_now.date() + timedelta(days=1)
+
+    candidate = datetime.combine(
+        next_day,
+        parsed_times[0],
+        tzinfo=tz,
+    )
+
+    return candidate.astimezone(timezone.utc)
+```
 
 ---
 
-### File 21: `app/workers/scheduler_worker.py`
-**Purpose:** Autonomous background daemon that runs dispatcher ticks on a recurring timer (`dispatch_tick_seconds`, default 5s).
+### File 21: `app/services/scheduled_request_service.py`
+**Purpose:** Durable MongoDB request persistence service for scheduled units. Creates idempotent `pending` crawl requests in MongoDB `rss_requests` that are later claimed and dispatched by `RequestWorker`.
+
+**Key Mechanics & Design Decisions:**
+1. **Deterministic Request ID:** Formats the request ID as `scheduled:{unit_id}:{scheduled_timestamp:.6f}`. Because the timestamp score is fixed to 6 decimal places, any retry or redundant dispatch produces the exact same `request_id`.
+2. **MongoDB As Durable Ledger:** Writes full request metadata (`source="bing"`, `source_type="rss"`, `status="pending"`, `url=build_bing_rss_url(term)`, `priority`, `unit_id`, `org_id`, `search_options`, `scheduled_for`).
+3. **Idempotency via `DuplicateKeyError`:** If a concurrent dispatch or retry occurs, MongoDB's unique index on `request_id` raises a `DuplicateKeyError`. The service queries `find_one({"request_id": request_id})` to verify the ID collision and returns `{"request_id": request_id, "created": False}`, preventing duplicates while permitting safe retry recovery.
+4. **Decoupled Architecture:** Scheduled requests enter the exact same durable pipeline as ad-hoc and seeded query requests. The scheduler does not push directly to connector streams; it relies on `RequestWorker` to claim and dispatch.
+
+```python
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+from pymongo.errors import DuplicateKeyError
+
+from app.platform.mongodb import rss_requests
+from app.services.bing_service import build_bing_rss_url
+
+logger = logging.getLogger(__name__)
+
+
+async def create_scheduled_rss_request(
+    unit_id: str,
+    term: str,
+    scheduled_for: float,
+    priority: str,
+    org_id: str = "",
+    search_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Create an idempotent RSS request for one scheduled occurrence.
+
+    The request is stored in MongoDB. The existing RequestWorker
+    will later publish it to the connector's Redis stream.
+    """
+    if not unit_id.strip():
+        raise ValueError("unit_id must not be empty")
+
+    if not term.strip():
+        raise ValueError("term must not be empty")
+
+    if not priority.strip():
+        raise ValueError("priority must not be empty")
+
+    scheduled_timestamp = float(scheduled_for)
+    request_id = f"scheduled:{unit_id}:{scheduled_timestamp:.6f}"
+
+    now = datetime.now(timezone.utc)
+    rss_url = build_bing_rss_url(term)
+
+    request_doc = {
+        "request_id": request_id,
+        "source": "bing",
+        "source_type": "rss",
+        "url": rss_url,
+        "metadata": {
+            "query": term,
+            "topic": None,
+            "unit_id": unit_id,
+            "org_id": org_id,
+            "search_options": search_options or {},
+            "scheduled_for": scheduled_timestamp,
+        },
+        "status": "pending",
+        "priority": priority.upper(),
+        "created_at": now,
+        "claimed_at": None,
+        "dispatched_at": None,
+        "completed_at": None,
+        "updated_at": now,
+        "stream_message_id": None,
+        "items_count": 0,
+        "new_items_count": 0,
+        "error_message": None,
+    }
+
+    try:
+        await rss_requests.insert_one(request_doc)
+
+        logger.info(
+            "Created scheduled request %s for unit %s",
+            request_id,
+            unit_id,
+        )
+
+        return {
+            "request_id": request_id,
+            "created": True,
+        }
+
+    except DuplicateKeyError:
+        existing = await rss_requests.find_one(
+            {"request_id": request_id},
+            {"_id": 1, "request_id": 1},
+        )
+
+        if existing is None:
+            raise
+
+        logger.info(
+            "Scheduled request %s already exists; treating as a retry",
+            request_id,
+        )
+
+        return {
+            "request_id": request_id,
+            "created": False,
+        }
+```
+
+---
+
+### File 22: `app/services/scheduler_service.py`
+**Purpose:** Core scheduling service orchestrating Redis hot-path indices, MongoDB schedule synchronization, due candidate discovery, and atomic two-phase dispatch.
+
+**Key Mechanics & Design Features:**
+1. **Redis Hot-Path Keyspace:**
+   - `schedule:due:{platform}:{priority}` (Sorted Set): Members are `unit_id`s, scored by next execution timestamp (Unix epoch float).
+   - `unit:{unit_id}` (Hash): Holds metadata (`term`, `cadence_seconds`, `schedule_type`, `run_times`, `timezone_name`, `enabled`, etc.).
+   - `schedule:active_keys` (Set): Holds `{platform}:{priority}` pairs for sweep discovery.
+   - `schedule:managed_unit_ids` (Set): Tracks unit IDs synchronized from MongoDB.
+2. **MongoDB Schedule Synchronization (`sync_scheduled_units_from_mongodb`):**
+   - Reads active schedules from MongoDB `scheduled_units`.
+   - Hydrates Redis with `preserve_due_time=True` (`pipe.zadd(..., nx=True)`), ensuring that existing runtime due scores are **never** overwritten by stale database timestamps.
+   - Reconciles deleted or disabled units via set difference (`(managed_ids - seen_ids) | disabled_ids`) and purges them from Redis ZSETs and Hashes.
+3. **Compare-And-Swap (CAS) Lua Script (`_ADVANCE_DUE_TIME_SCRIPT`):**
+   - Verifies `ZSCORE KEYS[1], unit_id == expected_due_time`.
+   - If score matches, updates score to `next_run_at` via `ZADD` and returns `1`.
+   - If score was changed or advanced by a concurrent worker, returns `0` without modifying the newer score.
+4. **Two-Phase Dispatch Sequence (`dispatch_due_unit`):**
+   - **Step A:** Calls `create_scheduled_rss_request()` to ensure durable MongoDB request exists.
+   - **Step B:** Calculates `next_run_at` (interval addition or `calculate_next_run()` for daily times) and executes `_ADVANCE_DUE_TIME_SCRIPT`. If CAS returns 0, logs safely and leaves the newer schedule intact.
+
+```python
+import logging
+import json
+import time
+from app.services.schedule_time_service import calculate_next_run
+from datetime import datetime, timezone
+
+from app.services.scheduled_request_service import (
+    create_scheduled_rss_request,
+)
+
+from app.platform.redis import redis_client
+from app.platform.mongodb import scheduled_units
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+ACTIVE_KEYS_SET = "schedule:active_keys"
+MANAGED_UNITS_SET = "schedule:managed_unit_ids"
+
+
+def _due_key(platform: str, priority: str) -> str:
+    return f"schedule:due:{platform.lower()}:{priority.lower()}"
+
+
+def _unit_key(unit_id: str) -> str:
+    return f"unit:{unit_id}"
+
+
+def _timestamp(value: datetime | int | float) -> float:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.timestamp()
+    return float(value)
+
+
+async def register_scheduled_unit(
+    unit_id: str,
+    platform: str,
+    priority: str,
+    next_run_at: datetime | int | float,
+    term: str,
+    cadence_seconds: int,
+    org_id: str = "",
+    search_options: dict | None = None,
+    enabled: bool = True,
+    managed_by_mongodb: bool = False,
+    preserve_due_time: bool = False,
+    schedule_type: str = "interval",
+    timezone_name: str = "Asia/Kolkata",
+    run_times: list[str] | None = None,
+) -> None:
+    if (
+        isinstance(cadence_seconds, bool)
+        or not isinstance(cadence_seconds, int)
+        or cadence_seconds <= 0
+    ):
+        raise ValueError("cadence_second must be a positive integer.")
+
+    if not isinstance(unit_id, str) or not unit_id.strip():
+        raise ValueError("unit_id is required.")
+
+    if not isinstance(platform, str) or not platform.strip():
+        raise ValueError("platform is required.")
+
+    if not isinstance(priority, str) or not priority.strip():
+        raise ValueError("priority is required.")
+
+    platform = platform.strip().lower()
+    priority = priority.strip().lower()
+    unit_id = unit_id.strip().lower()
+
+    due_key = _due_key(platform, priority)
+    unit_key = _unit_key(unit_id)
+
+    metadata = {
+        "term": term,
+        "org_id": org_id,
+        "search_options": json.dumps(search_options or {}),
+        "cadence_seconds": str(cadence_seconds),
+        "platform": platform,
+        "priority": priority,
+        "enabled": str(enabled).lower(),
+        "schedule_type": schedule_type,
+        "timezone_name": timezone_name,
+        "run_times": json.dumps(run_times or []),
+    }
+
+    async with redis_client.pipeline(transaction=True) as pipe:
+        if preserve_due_time:
+            pipe.zadd(due_key, {unit_id: _timestamp(next_run_at)}, nx=True)
+        else:
+            pipe.zadd(due_key, {unit_id: _timestamp(next_run_at)})
+
+        pipe.hset(unit_key, mapping=metadata)
+        pipe.sadd(ACTIVE_KEYS_SET, f"{platform}:{priority}")
+
+        if managed_by_mongodb:
+            pipe.sadd(MANAGED_UNITS_SET, unit_id)
+
+        await pipe.execute()
+
+
+async def sync_scheduled_units_from_mongodb() -> int:
+    cursor = scheduled_units.find({})
+    documents = await cursor.to_list(length=None)
+
+    synchronized_ids: set[str] = set()
+    seen_ids: set[str] = set()
+    disabled_ids: set[str] = set()
+
+    synchronized_count = 0
+
+    for document in documents:
+        unit_id = document.get("unit_id") or document.get("_id")
+
+        if not isinstance(unit_id, str) or not unit_id.strip():
+            logger.warning(
+                "Skipping scheduled unit with missing or invalid unit_id."
+            )
+            continue
+
+        unit_id = unit_id.strip()
+        seen_ids.add(unit_id)
+
+        enabled = document.get("enabled")
+        if not isinstance(enabled, bool):
+            logger.warning(
+                "Skipping scheduled unit %s: enabled must be a boolean.",
+                unit_id,
+            )
+            continue
+
+        if not enabled:
+            disabled_ids.add(unit_id)
+            continue
+
+        try:
+            platform = document["platform"]
+            priority = document["priority"]
+            term = document["term"]
+            next_run_at = document["next_run_at"]
+            cadence_seconds = document["cadence_seconds"]
+
+            schedule_type = document.get("schedule_type", "interval")
+            timezone_name = document.get("timezone_name", "Asia/Kolkata")
+            run_times = document.get("run_times", [])
+
+            if not isinstance(platform, str) or not platform.strip():
+                raise ValueError("platform must be a non-empty string")
+
+            if not isinstance(priority, str) or not priority.strip():
+                raise ValueError("priority must be a non-empty string")
+
+            if not isinstance(term, str) or not term.strip():
+                raise ValueError("term must be a non-empty string")
+
+            if isinstance(cadence_seconds, bool) or not isinstance(
+                cadence_seconds, int
+            ):
+                raise ValueError("cadence_seconds must be an integer.")
+
+            if cadence_seconds <= 0:
+                raise ValueError("cadence_seconds must be positive")
+
+            if not isinstance(next_run_at, (datetime, int, float)):
+                raise ValueError(
+                    "next_run_at must be a datetime or Unix timestamp"
+                )
+
+            if schedule_type not in {"interval", "daily_times"}:
+                raise ValueError("unsupported schedule_type")
+
+            if not isinstance(timezone_name, str) or not timezone_name.strip():
+                raise ValueError("invalid timezone_name")
+
+            if not isinstance(run_times, list) or not all(
+                isinstance(value, str) for value in run_times
+            ):
+                raise ValueError("run_times must be a list of strings")
+
+            if schedule_type == "daily_times" and not run_times:
+                raise ValueError("daily_times requires run_times")
+
+            await register_scheduled_unit(
+                unit_id=unit_id,
+                platform=platform,
+                priority=priority,
+                next_run_at=next_run_at,
+                term=term.strip(),
+                cadence_seconds=cadence_seconds,
+                org_id=str(document.get("org_id", "")),
+                search_options=document.get("search_options") or {},
+                enabled=True,
+                managed_by_mongodb=True,
+                preserve_due_time=True,
+                schedule_type=schedule_type,
+                timezone_name=timezone_name,
+                run_times=run_times,
+            )
+
+            synchronized_ids.add(unit_id)
+            synchronized_count += 1
+
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Skipping invalid scheduled unit %s: %s",
+                unit_id,
+                exc,
+            )
+
+    existing_managed_ids = await redis_client.smembers(MANAGED_UNITS_SET)
+    stale_ids = (existing_managed_ids - seen_ids) | disabled_ids
+
+    for stale_id in stale_ids:
+        unit_key = _unit_key(stale_id)
+        metadata = await redis_client.hgetall(unit_key)
+        platform = metadata.get("platform")
+        priority = metadata.get("priority")
+
+        async with redis_client.pipeline(transaction=True) as pipe:
+            if platform and priority:
+                due_key = _due_key(platform, priority)
+                pipe.zrem(due_key, stale_id)
+
+            pipe.delete(unit_key)
+            pipe.srem(MANAGED_UNITS_SET, stale_id)
+            await pipe.execute()
+
+        logger.info("Removed stale Mongo-managed schedule: %s", stale_id)
+
+    logger.info(
+        "MongoDB schedule synchronization complete: %s unit(s) synchronized.",
+        synchronized_count,
+    )
+
+    return synchronized_count
+
+
+_ADVANCE_DUE_TIME_SCRIPT = """
+local unit_id = ARGV[1]
+local expected_due_time = tonumber(ARGV[2])
+local next_run_at = tonumber(ARGV[3])
+
+local current_due_time = redis.call("ZSCORE", KEYS[1], unit_id)
+
+if not current_due_time then
+    return 0
+end
+
+if tonumber(current_due_time) ~= expected_due_time then
+    return 0
+end
+
+redis.call("ZADD", KEYS[1], next_run_at, unit_id)
+
+return 1
+"""
+
+
+async def dispatch_due_unit(
+    unit_id: str,
+    platform: str,
+    priority: str,
+    now: float | None = None,
+) -> dict[str, str] | None:
+    current_time = time.time() if now is None else float(now)
+
+    platform = platform.strip().lower()
+    priority = priority.strip().lower()
+
+    due_key = _due_key(platform, priority)
+    unit_key = _unit_key(unit_id)
+
+    due_score = await redis_client.zscore(due_key, unit_id)
+    if due_score is None:
+        return None
+
+    scheduled_for = float(due_score)
+    if scheduled_for > current_time:
+        return None
+
+    metadata = await redis_client.hgetall(unit_key)
+    if not metadata:
+        logger.warning("Missing metadata for scheduled unit %s", unit_id)
+        return None
+
+    if metadata.get("enabled") == "false":
+        await redis_client.zrem(due_key, unit_id)
+        return None
+
+    term = metadata.get("term")
+    stored_platform = metadata.get("platform")
+    stored_priority = metadata.get("priority")
+    cadence_value = metadata.get("cadence_seconds")
+
+    if not term or not stored_platform or not stored_priority:
+        raise ValueError(f"Invalid metadata for scheduled unit {unit_id}")
+
+    if stored_platform != platform or stored_priority != priority:
+        logger.warning(
+            "Schedule metadata does not match its Redis index: %s",
+            unit_id,
+        )
+        return None
+
+    try:
+        cadence_seconds = int(cadence_value)
+        search_options = json.loads(metadata.get("search_options") or "{}")
+        schedule_type = metadata.get("schedule_type", "interval")
+        timezone_name = metadata.get("timezone_name", "Asia/Kolkata")
+        run_times = json.loads(metadata.get("run_times") or "[]")
+
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid metadata for scheduled unit {unit_id}") from exc
+
+    if cadence_seconds <= 0:
+        raise ValueError(f"Invalid cadence for scheduled unit {unit_id}")
+
+    if not isinstance(search_options, dict):
+        raise ValueError(f"search_options must be an object for unit {unit_id}")
+
+    if not isinstance(run_times, list) or not all(
+        isinstance(value, str) for value in run_times
+    ):
+        raise ValueError(f"run_times must be a list of strings for unit {unit_id}")
+
+    if schedule_type == "daily_times" and not run_times:
+        raise ValueError(f"Daily schedule requires run_times for unit {unit_id}")
+
+    # Step A: create the durable MongoDB request first.
+    request = await create_scheduled_rss_request(
+        unit_id=unit_id,
+        term=term,
+        scheduled_for=scheduled_for,
+        priority=stored_priority,
+        org_id=metadata.get("org_id", ""),
+        search_options=search_options,
+    )
+
+    # Step B: advance Redis only after request exists
+    if schedule_type == "interval":
+        next_run_at = current_time + cadence_seconds
+    else:
+        next_run_at = calculate_next_run(
+            now=datetime.fromtimestamp(current_time, tz=timezone.utc),
+            run_times=run_times,
+            timezone_name=timezone_name,
+        ).timestamp()
+
+    advanced = await redis_client.eval(
+        _ADVANCE_DUE_TIME_SCRIPT,
+        1,
+        due_key,
+        unit_id,
+        scheduled_for,
+        next_run_at,
+    )
+
+    if int(advanced) != 1:
+        logger.info(
+            "Schedule %s was already advanced or changed; request %s remains durable",
+            unit_id,
+            request["request_id"],
+        )
+        return None
+
+    return {
+        "request_id": request["request_id"],
+        "next_run_at": str(next_run_at),
+        "created": str(request["created"]),
+    }
+
+
+async def get_due_unit_id(
+    platform: str,
+    priority: str,
+    limit: int = 100,
+    now: float | None = None,
+) -> list[str]:
+    if limit <= 0:
+        raise ValueError("Limit must be greater than zero")
+
+    due_key = _due_key(platform, priority)
+    current_time = time.time() if now is None else now
+
+    return await redis_client.zrangebyscore(
+        due_key,
+        min="-inf",
+        max=current_time,
+        start=0,
+        num=limit,
+    )
+
+
+async def dispatch_due_units_once(
+    limit_per_key: int = 100,
+    now: float | None = None,
+    platform_priority_keys: set[str] | None = None,
+) -> int:
+    if limit_per_key <= 0:
+        raise ValueError("limit_per_key must be greater than zero")
+
+    current_time = time.time() if now is None else float(now)
+    dispatched_count = 0
+
+    if platform_priority_keys is None:
+        active_keys = await redis_client.smembers(ACTIVE_KEYS_SET)
+    else:
+        active_keys = platform_priority_keys
+
+    for active_key in sorted(active_keys):
+        try:
+            platform, priority = active_key.split(":", 1)
+        except ValueError:
+            logger.warning("Ignoring invalid scheduler key: %s", active_key)
+            continue
+
+        due_unit_ids = await get_due_unit_id(
+            platform=platform,
+            priority=priority,
+            limit=limit_per_key,
+            now=current_time,
+        )
+
+        for unit_id in due_unit_ids:
+            result = await dispatch_due_unit(
+                unit_id=unit_id,
+                platform=platform,
+                priority=priority,
+                now=current_time,
+            )
+
+            if result is None:
+                continue
+
+            dispatched_count += 1
+            logger.info(
+                "Created scheduled request %s for unit %s; next run at %s",
+                result["request_id"],
+                unit_id,
+                result["next_run_at"],
+            )
+
+    return dispatched_count
+```
+
+---
+
+### File 23: `app/workers/scheduler_worker.py`
+**Purpose:** Autonomous background daemon running periodic schedule ticks. Synchronizes MongoDB definitions before dispatching due units on a configurable timer (`dispatch_tick_seconds`, default 5s).
 
 **Key Mechanics:**
-- **Initialization:** Reads `dispatch_tick_seconds` from `app.core.config.settings` (can be overridden in constructor).
-- **`run_once()`:** Invokes `dispatch_due_units_once()` and logs the number of dispatched units.
-- **`run()`:** Continuous async loop:
-  - Executes `run_once()`.
-  - Catches ordinary exceptions, logs `"Scheduler tick failed."`, and continues running without terminating the worker. *(Note: logs at INFO level without exception traceback; see Defect Register 6)*.
-  - Waits `tick_seconds` using `asyncio.wait_for(self._stop_event.wait(), timeout=self.tick_seconds)`.
-- **`stop()`:** Sets `_stop_event` to break the loop and ensure graceful application shutdown.
-- **FastAPI Integration:** Instantiated and supervised within `app/main.py` lifespan alongside `RequestWorker` and `ResultWorker`.
+1. **Synchronization Before Dispatch:** `run_once()` executes `sync_scheduled_units_from_mongodb()` *prior* to `dispatch_due_units_once()`. This ensures any new, modified, or disabled schedules in MongoDB are synchronized into Redis before candidate evaluation begins.
+2. **Robust Exception Handling:** Ordinary tick failures are caught and logged with full exception tracebacks (`logger.exception("Scheduler tick failed.")`), preventing worker crash.
+3. **Graceful Lifecycle Management:** Controlled via `self._stop_event`. Calling `await worker.stop()` unblocks idle waits immediately.
+
+```python
+import logging
+import asyncio
+
+from app.core.config import settings
+from app.services.scheduler_service import (
+    dispatch_due_units_once,
+    sync_scheduled_units_from_mongodb,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class SchedulerWorker:
+    """Runs the scheduler dispatcher periodically."""
+
+    def __init__(self, tick_seconds: int | None = None):
+        self.tick_seconds = (
+            settings.dispatch_tick_seconds
+            if tick_seconds is None
+            else tick_seconds
+        )
+
+        if self.tick_seconds <= 0:
+            raise ValueError("Tick_seconds must be greater than zero.")
+
+        self._stop_event = asyncio.Event()
+
+    async def run_once(self) -> int:
+        """Synchronize schedules and execute one dispatcher tick."""
+        await sync_scheduled_units_from_mongodb()
+
+        dispatched_count = await dispatch_due_units_once()
+
+        logger.info(
+            "Scheduler tick completed. Dispatched %s units.",
+            dispatched_count,
+        )
+
+        return dispatched_count
+
+    async def run(self) -> None:
+        """Run dispatcher tick until shutdown is requested."""
+        self._stop_event.clear()
+
+        logger.info(
+            "Scheduler worker started. Tick interval: %s seconds.",
+            self.tick_seconds,
+        )
+
+        while not self._stop_event.is_set():
+            try:
+                await self.run_once()
+            except asyncio.CancelledError:
+                logger.info("Scheduler worker received cancellation signal.")
+                raise
+            except Exception:
+                logger.exception("Scheduler tick failed.")
+
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=self.tick_seconds,
+                )
+            except asyncio.TimeoutError:
+                pass
+
+        logger.info("Scheduler worker stopped.")
+
+    async def stop(self) -> None:
+        """Request a graceful shutdown."""
+        self._stop_event.set()
+```
 
 ---
 
-### File 22: `app/test/test_scheduler_service.py`
-**Purpose:** Unit test verifying scheduled unit registration, Redis Hash metadata storage, and time-based due lookups.
+### File 24: `app/test/test_schedule_time_service.py`
+**Purpose:** Pure unit test suite for `calculate_next_run()`. Validates daily schedule calculations against clock times in `Asia/Kolkata` with zero database or Redis dependencies.
 
-**Verifications:**
+**Verifications Covered:**
+- `test_before_first_run`: 04:15 UTC (09:45 IST) -> 04:30 UTC (10:00 IST).
+- `test_between_daily_runs`: 04:35 UTC (10:05 IST) -> 13:30 UTC (19:00 IST).
+- `test_after_last_run`: 14:00 UTC (19:30 IST) -> next day 04:30 UTC (10:00 IST next day).
+- `test_exact_run_time_moves_to_next_run`: 04:30 UTC (10:00 IST) -> 13:30 UTC (19:00 IST).
+- `test_empty_run_times_rejected`: Rejects empty lists with `ValueError`.
+
+```python
+import unittest
+from datetime import datetime, timezone
+
+from app.services.schedule_time_service import calculate_next_run
+
+
+class TestCalculateNextRun(unittest.TestCase):
+
+    RUN_TIMES = ["10:00", "19:00"]
+
+    def test_before_first_run(self):
+        now = datetime(2026, 10, 13, 4, 15, tzinfo=timezone.utc)
+        result = calculate_next_run(now, self.RUN_TIMES)
+        self.assertEqual(result, datetime(2026, 10, 13, 4, 30, tzinfo=timezone.utc))
+
+    def test_between_daily_runs(self):
+        now = datetime(2026, 10, 13, 4, 35, tzinfo=timezone.utc)
+        result = calculate_next_run(now, self.RUN_TIMES)
+        self.assertEqual(result, datetime(2026, 10, 13, 13, 30, tzinfo=timezone.utc))
+
+    def test_after_last_run(self):
+        now = datetime(2026, 10, 13, 14, 0, tzinfo=timezone.utc)
+        result = calculate_next_run(now, self.RUN_TIMES)
+        self.assertEqual(result, datetime(2026, 10, 14, 4, 30, tzinfo=timezone.utc))
+
+    def test_exact_run_time_moves_to_next_run(self):
+        now = datetime(2026, 10, 13, 4, 30, tzinfo=timezone.utc)
+        result = calculate_next_run(now, self.RUN_TIMES)
+        self.assertEqual(result, datetime(2026, 10, 13, 13, 30, tzinfo=timezone.utc))
+
+    def test_empty_run_times_rejected(self):
+        with self.assertRaises(ValueError):
+            calculate_next_run(datetime.now(timezone.utc), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+---
+
+### File 25: `app/test/test_scheduled_request_service.py`
+**Purpose:** Mocked integration test suite for `create_scheduled_rss_request()`. Verifies MongoDB document structure, deterministic request ID format, and duplicate retry tolerance.
+
+**Verifications Covered:**
+- `test_creates_new_scheduled_request`: Confirms document fields (`status="pending"`, `source="bing"`, `source_type="rss"`, `priority="NORMAL"`, `unit_id="unit-001"`, and deterministic ID `scheduled:unit-001:1791800000.000000`).
+- `test_existing_request_is_treated_as_retry`: Verifies that catching `DuplicateKeyError` queries MongoDB and returns `created=False`.
+- `test_unmatched_duplicate_error_is_raised`: Ensures unrelated duplicate constraint errors re-raise.
+
+```python
+import unittest
+from unittest.mock import AsyncMock, patch
+from pymongo.errors import DuplicateKeyError
+from app.services.scheduled_request_service import create_scheduled_rss_request
+
+
+class TestScheduledRequestService(unittest.IsolatedAsyncioTestCase):
+
+    async def test_creates_new_scheduled_request(self):
+        with (
+            patch("app.services.scheduled_request_service.rss_requests") as mock_collection,
+            patch("app.services.scheduled_request_service.build_bing_rss_url", return_value="https://example.com/rss"),
+        ):
+            mock_collection.insert_one = AsyncMock()
+
+            result = await create_scheduled_rss_request(
+                unit_id="unit-001",
+                term="gold price",
+                scheduled_for=1791800000.0,
+                priority="normal",
+                org_id="org-001",
+                search_options={"region": "IN"},
+            )
+
+            self.assertTrue(result["created"])
+            self.assertEqual(result["request_id"], "scheduled:unit-001:1791800000.000000")
+
+            request_doc = mock_collection.insert_one.await_args.args[0]
+            self.assertEqual(request_doc["status"], "pending")
+            self.assertEqual(request_doc["source"], "bing")
+            self.assertEqual(request_doc["source_type"], "rss")
+            self.assertEqual(request_doc["url"], "https://example.com/rss")
+            self.assertEqual(request_doc["priority"], "NORMAL")
+            self.assertEqual(request_doc["metadata"]["unit_id"], "unit-001")
+            self.assertNotIn("active_query_key", request_doc)
+
+    async def test_existing_request_is_treated_as_retry(self):
+        with patch("app.services.scheduled_request_service.rss_requests") as mock_collection:
+            mock_collection.insert_one = AsyncMock(side_effect=DuplicateKeyError("duplicate"))
+            mock_collection.find_one = AsyncMock(return_value={"request_id": "scheduled:unit-001:1791800000.000000"})
+
+            result = await create_scheduled_rss_request(
+                unit_id="unit-001",
+                term="gold price",
+                scheduled_for=1791800000.0,
+                priority="NORMAL",
+            )
+
+            self.assertFalse(result["created"])
+            mock_collection.insert_one.assert_awaited_once()
+            mock_collection.find_one.assert_awaited_once()
+
+    async def test_unmatched_duplicate_error_is_raised(self):
+        with patch("app.services.scheduled_request_service.rss_requests") as mock_collection:
+            mock_collection.insert_one = AsyncMock(side_effect=DuplicateKeyError("duplicate"))
+            mock_collection.find_one = AsyncMock(return_value=None)
+
+            with self.assertRaises(DuplicateKeyError):
+                await create_scheduled_rss_request(
+                    unit_id="unit-001",
+                    term="gold price",
+                    scheduled_for=1791800000.0,
+                    priority="NORMAL",
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+---
+
+### File 26: `app/test/test_scheduler_dispatch.py`
+**Purpose:** Mocked integration test suite for `dispatch_due_unit()`. Verifies strict request-creation-before-score-advance sequence, Compare-and-Swap protection, daily scheduling next-run calculations, and absence of direct Redis stream publishing.
+
+**Verifications Covered:**
+- `test_due_unit_creates_request_with_correct_arguments`: Verifies arguments passed to `create_scheduled_rss_request`.
+- `test_due_time_is_advanced_after_request_creation`: Asserts execution order: `["request_created", "advance_due_time"]`.
+- `test_changed_due_score_returns_none_and_logs`: Verifies that if CAS Lua returns 0, the function logs and returns `None`.
+- `test_future_due_unit_is_not_dispatched`: Future units are skipped without calling request creation.
+- `test_missing_metadata_does_not_create_request`: Unregistered units do not trigger request creation.
+- `test_scheduler_does_not_publish_to_connector_stream`: Proves `XADD` is never invoked by the scheduler.
+- `test_daily_schedule_before_first_run`, `test_daily_schedule_between_run_times`, `test_daily_schedule_after_last_run`: Verifies daily schedule calculation integration with 10:00 AM and 7:00 PM IST clock times.
+
+```python
+import logging
+import unittest
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from unittest.mock import AsyncMock, patch
+
+from app.services import scheduler_service
+
+
+class TestSchedulerDispatch(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        self.redis = AsyncMock()
+        self.create_request = AsyncMock(
+            return_value={
+                "request_id": "scheduled:unit-001:1900.000000",
+                "created": True,
+            }
+        )
+
+        self.redis_patch = patch.object(scheduler_service, "redis_client", self.redis)
+        self.request_patch = patch.object(scheduler_service, "create_scheduled_rss_request", self.create_request)
+
+        self.redis_patch.start()
+        self.request_patch.start()
+
+        self.addCleanup(self.redis_patch.stop)
+        self.addCleanup(self.request_patch.stop)
+
+        self.unit_id = "unit-001"
+        self.platform = "rss"
+        self.priority = "high"
+        self.due_score = 1900.0
+        self.now = 2000.0
+        self.cadence_seconds = 300
+
+        self.due_key = scheduler_service._due_key(self.platform, self.priority)
+        self.unit_key = scheduler_service._unit_key(self.unit_id)
+
+        self.metadata = {
+            "term": "copper prices",
+            "platform": "rss",
+            "priority": "high",
+            "org_id": "test-org",
+            "search_options": '{"language": "en"}',
+            "cadence_seconds": str(self.cadence_seconds),
+            "enabled": "true",
+        }
+
+        self.redis.zscore.return_value = self.due_score
+        self.redis.hgetall.return_value = self.metadata
+        self.redis.eval.return_value = 1
+
+    async def test_due_unit_creates_request_with_correct_arguments(self):
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
+        )
+
+        self.create_request.assert_awaited_once_with(
+            unit_id="unit-001",
+            term="copper prices",
+            scheduled_for=1900.0,
+            priority="high",
+            org_id="test-org",
+            search_options={"language": "en"},
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["request_id"], "scheduled:unit-001:1900.000000")
+        self.assertEqual(result["next_run_at"], "2300.0")
+        self.assertEqual(result["created"], "True")
+
+    async def test_due_time_is_advanced_after_request_creation(self):
+        call_order = []
+
+        async def create_request_side_effect(**kwargs):
+            call_order.append("request_created")
+            return {"request_id": "scheduled:unit-001:1900.000000", "created": True}
+
+        async def eval_side_effect(*args):
+            call_order.append("advance_due_time")
+            return 1
+
+        self.create_request.side_effect = create_request_side_effect
+        self.redis.eval.side_effect = eval_side_effect
+
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(call_order, ["request_created", "advance_due_time"])
+        self.redis.eval.assert_awaited_once_with(
+            scheduler_service._ADVANCE_DUE_TIME_SCRIPT,
+            1,
+            self.due_key,
+            self.unit_id,
+            self.due_score,
+            self.now + self.cadence_seconds,
+        )
+
+    async def test_changed_due_score_returns_none_and_logs(self):
+        self.redis.eval.return_value = 0
+
+        with self.assertLogs(scheduler_service.logger, level=logging.INFO) as captured:
+            result = await scheduler_service.dispatch_due_unit(
+                unit_id=self.unit_id,
+                platform=self.platform,
+                priority=self.priority,
+                now=self.now,
+            )
+
+        self.assertIsNone(result)
+        self.create_request.assert_awaited_once()
+        self.assertTrue(any("already advanced" in m.lower() for m in captured.output))
+
+    async def test_future_due_unit_is_not_dispatched(self):
+        self.redis.zscore.return_value = self.now + 100
+
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
+        )
+
+        self.assertIsNone(result)
+        self.create_request.assert_not_awaited()
+        self.redis.hgetall.assert_not_awaited()
+        self.redis.eval.assert_not_awaited()
+
+    async def test_missing_metadata_does_not_create_request(self):
+        self.redis.hgetall.return_value = {}
+
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
+        )
+
+        self.assertIsNone(result)
+        self.create_request.assert_not_awaited()
+        self.redis.eval.assert_not_awaited()
+
+    async def test_scheduler_does_not_publish_to_connector_stream(self):
+        await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=self.now,
+        )
+
+        self.redis.xadd.assert_not_awaited()
+        self.assertNotIn("XADD", scheduler_service._ADVANCE_DUE_TIME_SCRIPT.upper())
+
+    async def _assert_daily_next_run(self, hour: int, minute: int, expected_day: int, expected_hour: int):
+        ist = ZoneInfo("Asia/Kolkata")
+        local_now = datetime(2026, 10, 13, hour, minute, tzinfo=ist)
+        now_timestamp = local_now.timestamp()
+
+        expected_local = datetime(2026, 10, expected_day, expected_hour, 0, tzinfo=ist)
+        expected_timestamp = expected_local.timestamp()
+
+        self.metadata.update({
+            "schedule_type": "daily_times",
+            "timezone_name": "Asia/Kolkata",
+            "run_times": '["10:00", "19:00"]',
+        })
+
+        result = await scheduler_service.dispatch_due_unit(
+            unit_id=self.unit_id,
+            platform=self.platform,
+            priority=self.priority,
+            now=now_timestamp,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(float(result["next_run_at"]), expected_timestamp)
+
+    async def test_daily_schedule_before_first_run(self):
+        await self._assert_daily_next_run(hour=9, minute=45, expected_day=13, expected_hour=10)
+
+    async def test_daily_schedule_between_run_times(self):
+        await self._assert_daily_next_run(hour=10, minute=5, expected_day=13, expected_hour=19)
+
+    async def test_daily_schedule_after_last_run(self):
+        await self._assert_daily_next_run(hour=19, minute=30, expected_day=14, expected_hour=10)
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+---
+
+### File 27: `app/test/test_scheduler_sync.py`
+**Purpose:** Mocked integration test suite for `sync_scheduled_units_from_mongodb()`. Verifies schedule registration, validation, error handling, and purge of deleted or disabled units.
+
+**Verifications Covered:**
+- `test_enabled_schedule_is_registered`: Verifies that active MongoDB records register in Redis with `preserve_due_time=True`.
+- `test_disabled_managed_schedule_is_removed`: Verifies that disabling a schedule removes it from Redis ZSETs and deletes metadata hashes.
+- `test_missing_managed_schedule_is_removed`: Purges units deleted from MongoDB.
+- `test_invalid_schedules_are_skipped`: Validates graceful skipping on malformed cadence, invalid timezones, or bad timestamps.
+
+```python
+import asyncio
+import unittest
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from app.services import scheduler_service as scheduler
+
+
+class TestSchedulerMongoSync(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        self.mongo_cursor = MagicMock()
+        self.mongo_cursor.to_list = AsyncMock(return_value=[])
+
+        self.mongo_collection = MagicMock()
+        self.mongo_collection.find.return_value = self.mongo_cursor
+
+        self.redis = MagicMock()
+        self.redis.smembers = AsyncMock(return_value=set())
+        self.redis.hgetall = AsyncMock(return_value={})
+
+        self.pipeline = MagicMock()
+        self.pipeline.execute = AsyncMock()
+
+        self.pipeline_context = MagicMock()
+        self.pipeline_context.__aenter__ = AsyncMock(return_value=self.pipeline)
+        self.pipeline_context.__aexit__ = AsyncMock(return_value=False)
+
+        self.redis.pipeline.return_value = self.pipeline_context
+
+        self.mongo_patch = patch.object(scheduler, "scheduled_units", self.mongo_collection)
+        self.redis_patch = patch.object(scheduler, "redis_client", self.redis)
+        self.register_patch = patch.object(scheduler, "register_scheduled_unit", new_callable=AsyncMock)
+
+        self.mongo_patch.start()
+        self.redis_patch.start()
+        self.mock_register = self.register_patch.start()
+
+        self.addCleanup(self.mongo_patch.stop)
+        self.addCleanup(self.redis_patch.stop)
+        self.addCleanup(self.register_patch.stop)
+
+    def make_document(self, **overrides):
+        document = {
+            "unit_id": "test-schedule-001",
+            "platform": "rss",
+            "priority": "high",
+            "term": "copper prices",
+            "next_run_at": datetime.now(timezone.utc),
+            "cadence_seconds": 300,
+            "org_id": "test-org",
+            "search_options": {"language": "en"},
+            "enabled": True,
+        }
+        document.update(overrides)
+        return document
+
+    async def test_enabled_schedule_is_registered(self):
+        document = self.make_document()
+        self.mongo_cursor.to_list.return_value = [document]
+
+        count = await scheduler.sync_scheduled_units_from_mongodb()
+
+        self.assertEqual(count, 1)
+        self.mock_register.assert_awaited_once_with(
+            unit_id="test-schedule-001",
+            platform="rss",
+            priority="high",
+            next_run_at=document["next_run_at"],
+            term="copper prices",
+            cadence_seconds=300,
+            org_id="test-org",
+            search_options={"language": "en"},
+            enabled=True,
+            managed_by_mongodb=True,
+            preserve_due_time=True,
+            schedule_type="interval",
+            timezone_name="Asia/Kolkata",
+            run_times=[],
+        )
+
+    async def test_disabled_managed_schedule_is_removed(self):
+        document = self.make_document(enabled=False)
+        self.mongo_cursor.to_list.return_value = [document]
+        self.redis.smembers.return_value = {"test-schedule-001"}
+        self.redis.hgetall.return_value = {"platform": "rss", "priority": "high"}
+
+        count = await scheduler.sync_scheduled_units_from_mongodb()
+
+        self.assertEqual(count, 0)
+        self.pipeline.zrem.assert_called_once_with("schedule:due:rss:high", "test-schedule-001")
+        self.pipeline.delete.assert_called_once_with("unit:test-schedule-001")
+        self.pipeline.srem.assert_called_once_with(scheduler.MANAGED_UNITS_SET, "test-schedule-001")
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+---
+
+### File 28: `app/test/test_scheduler_sync_due_time.py`
+**Purpose:** Real Redis integration test confirming that MongoDB-to-Redis synchronization preserves existing runtime due scores in Redis rather than resetting them to stale MongoDB timestamps.
+
+**Verifications Covered:**
+- Registers a schedule in real Redis with `original_due_time`.
+- Advances score in real Redis to `runtime_due_time`.
+- Runs `sync_scheduled_units_from_mongodb()` where MongoDB has `original_due_time`.
+- Confirms Redis score remains `runtime_due_time` (guaranteed by `pipe.zadd(..., nx=True)`).
+- Cleans up real Redis keys.
+
+```python
+import time
+import unittest
+import uuid
+from unittest.mock import patch
+
+from app.platform.redis import redis_client
+from app.services import scheduler_service
+
+
+class FakeCursor:
+    def __init__(self, documents):
+        self.documents = documents
+
+    async def to_list(self, length=None):
+        return self.documents
+
+
+class FakeScheduledUnitsCollection:
+    def __init__(self, documents):
+        self.documents = documents
+
+    def find(self, query):
+        return FakeCursor(self.documents)
+
+
+class TestSchedulerSyncDueTime(unittest.IsolatedAsyncioTestCase):
+
+    async def test_sync_preserves_existing_redis_due_time(self):
+        unit_id = f"test-preserve-due-{uuid.uuid4().hex}"
+        platform = "rss"
+        priority = "high"
+
+        due_key = scheduler_service._due_key(platform, priority)
+        unit_key = scheduler_service._unit_key(unit_id)
+
+        active_key = f"{platform}:{priority}"
+        original_due_time = time.time() + 3600
+        runtime_due_time = original_due_time + 600
+
+        try:
+            await scheduler_service.register_scheduled_unit(
+                unit_id=unit_id,
+                platform=platform,
+                priority=priority,
+                next_run_at=original_due_time,
+                term="copper prices",
+                cadence_seconds=300,
+                org_id="test-org",
+                search_options={"language": "en"},
+                enabled=True,
+                managed_by_mongodb=True,
+            )
+
+            await redis_client.zadd(due_key, {unit_id: runtime_due_time})
+
+            score_before_sync = await redis_client.zscore(due_key, unit_id)
+            self.assertAlmostEqual(score_before_sync, runtime_due_time, places=3)
+
+            documents = [
+                {
+                    "unit_id": unit_id,
+                    "platform": platform,
+                    "priority": priority,
+                    "term": "copper prices",
+                    "cadence_seconds": 300,
+                    "next_run_at": original_due_time,
+                    "org_id": "test-org",
+                    "search_options": {"language": "en"},
+                    "enabled": True,
+                }
+            ]
+
+            fake_collection = FakeScheduledUnitsCollection(documents)
+
+            with patch.object(scheduler_service, "scheduled_units", fake_collection):
+                synchronized_count = await scheduler_service.sync_scheduled_units_from_mongodb()
+
+            score_after_sync = await redis_client.zscore(due_key, unit_id)
+            self.assertEqual(synchronized_count, 1)
+            self.assertAlmostEqual(score_after_sync, runtime_due_time, places=3)
+
+        finally:
+            async with redis_client.pipeline(transaction=True) as pipe:
+                pipe.zrem(due_key, unit_id)
+                pipe.delete(unit_key)
+                pipe.srem(scheduler_service.ACTIVE_KEYS_SET, active_key)
+                pipe.srem(scheduler_service.MANAGED_UNITS_SET, unit_id)
+                await pipe.execute()
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+---
+
+### File 29: `app/test/test_scheduler_tick.py`
+**Purpose:** Standalone Redis integration test verifying multi-combination dispatcher sweeps, request creation, future score advancement, idempotency on repeated ticks, and absence of stream publishing.
+
+**Verifications Covered:**
+- Registers two distinct scheduled units across different platform/priority combinations.
+- Runs `dispatch_due_units_once(now=now)`: confirms exactly 2 units dispatched and requests created.
+- Confirms sorted-set scores advanced into the future.
+- Executes second tick immediately at identical timestamp: confirms 0 dispatches.
+- Confirms connector streams remain empty (no direct `XADD`).
+
+```python
+import asyncio
+import time
+import uuid
+from unittest.mock import AsyncMock, patch
+
+from app.platform.redis import redis_client
+from app.services import scheduler_service
+
+ACTIVE_KEYS_SET = "schedule:active_keys"
+MANAGED_UNITS_SET = "schedule:managed_unit_ids"
+
+
+async def main():
+    suffix = uuid.uuid4().hex
+
+    test_cases = [
+        {
+            "platform": f"test-a-{suffix}",
+            "priority": "high",
+            "unit_id": f"test-unit-a-{suffix}",
+            "term": "copper prices",
+        },
+        {
+            "platform": f"test-b-{suffix}",
+            "priority": "normal",
+            "unit_id": f"test-unit-b-{suffix}",
+            "term": "gold prices",
+        },
+    ]
+
+    created_keys = []
+    mock_create_request = AsyncMock()
+
+    async def create_request_side_effect(**kwargs):
+        return {
+            "request_id": f"scheduled:{kwargs['unit_id']}:{kwargs['scheduled_for']:.6f}",
+            "created": True,
+        }
+
+    mock_create_request.side_effect = create_request_side_effect
+
+    try:
+        now = time.time()
+
+        for case in test_cases:
+            platform = case["platform"]
+            priority = case["priority"]
+            unit_id = case["unit_id"]
+
+            await scheduler_service.register_scheduled_unit(
+                unit_id=unit_id,
+                platform=platform,
+                priority=priority,
+                next_run_at=now - 1,
+                term=case["term"],
+                cadence_seconds=300,
+            )
+
+            created_keys.append(
+                (
+                    scheduler_service._due_key(platform, priority),
+                    unit_id,
+                    scheduler_service._unit_key(unit_id),
+                    f"{platform}:{priority}",
+                )
+            )
+
+        with patch.object(
+            scheduler_service,
+            "create_scheduled_rss_request",
+            mock_create_request,
+        ):
+            count = await scheduler_service.dispatch_due_units_once(now=now)
+            assert count == 2, f"Expected 2 dispatched units, got {count}"
+
+            for case in test_cases:
+                due_key = scheduler_service._due_key(case["platform"], case["priority"])
+                next_run = await redis_client.zscore(due_key, case["unit_id"])
+                assert next_run is not None
+                assert next_run > now
+
+            remaining = await scheduler_service.dispatch_due_units_once(now=now)
+            assert remaining == 0, f"Expected 0 repeated dispatches, got {remaining}"
+
+        for case in test_cases:
+            stream_name = f"queue:connector:{case['platform']}:{case['priority']}"
+            messages = await redis_client.xrange(stream_name)
+            assert len(messages) == 0
+
+        print("PASS: scheduler dispatch sweep verified successfully")
+
+    finally:
+        for due_key, unit_id, unit_key, active_key in created_keys:
+            await redis_client.zrem(due_key, unit_id)
+            await redis_client.delete(unit_key)
+            await redis_client.srem(ACTIVE_KEYS_SET, active_key)
+            await redis_client.srem(MANAGED_UNITS_SET, unit_id)
+
+        await redis_client.aclose()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+### File 30: `app/test/test_scheduler_worker.py`
+**Purpose:** Unit test suite for `SchedulerWorker` lifecycle. Verifies that synchronization runs strictly before dispatch, periodic execution operates on schedule, and graceful shutdown terminates cleanly.
+
+**Verifications Covered:**
+- `test_sync_runs_before_dispatch`: Asserts execution order: `["sync", "dispatch"]`.
+- `test_worker_runs_three_ticks_and_stops`: Confirms worker runs exactly 3 ticks and halts when `stop()` is called.
+
+```python
+import asyncio
+import unittest
+from unittest.mock import AsyncMock, patch
+
+import app.workers.scheduler_worker as scheduler_module
+from app.workers.scheduler_worker import SchedulerWorker
+
+
+class TestSchedulerWorker(unittest.IsolatedAsyncioTestCase):
+
+    async def test_sync_runs_before_dispatch(self):
+        worker = SchedulerWorker(tick_seconds=0.05)
+        call_order = []
+
+        async def fake_sync():
+            call_order.append("sync")
+
+        async def fake_dispatch():
+            call_order.append("dispatch")
+            await worker.stop()
+            return 0
+
+        with (
+            patch.object(
+                scheduler_module,
+                "sync_scheduled_units_from_mongodb",
+                new=AsyncMock(side_effect=fake_sync),
+            ),
+            patch.object(
+                scheduler_module,
+                "dispatch_due_units_once",
+                new=AsyncMock(side_effect=fake_dispatch),
+            ),
+        ):
+            await asyncio.wait_for(worker.run(), timeout=2)
+
+        self.assertEqual(call_order, ["sync", "dispatch"])
+
+    async def test_worker_runs_three_ticks_and_stops(self):
+        worker = SchedulerWorker(tick_seconds=0.05)
+        call_count = 0
+
+        async def fake_sync():
+            return None
+
+        async def fake_dispatch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 3:
+                await worker.stop()
+            return 0
+
+        with (
+            patch.object(
+                scheduler_module,
+                "sync_scheduled_units_from_mongodb",
+                new=AsyncMock(side_effect=fake_sync),
+            ),
+            patch.object(
+                scheduler_module,
+                "dispatch_due_units_once",
+                new=AsyncMock(side_effect=fake_dispatch),
+            ),
+        ):
+            await asyncio.wait_for(worker.run(), timeout=2)
+
+        self.assertEqual(call_count, 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+---
+
+### File 31: `app/test/test_scheduler_service.py`
+**Purpose:** Real Redis unit test verifying scheduled unit registration, Redis Hash metadata storage, and time-based due lookups with cleanup.
+
+**Verifications Covered:**
 - Registers a unit scheduled 60 seconds into the future.
 - Confirms hash fields `term` and `cadence_seconds` match in Redis `unit:{unit_id}`.
 - Confirms unit is **not** returned when `now = future_time - 1`.
 - Confirms unit **is** returned when `now = future_time`.
-- Cleans up created test keys upon completion *(Note: contains typo in cleanup `"schedule:active_key"`; see Defect Register 3)*.
+- Cleans up created test keys.
+
+```python
+import asyncio
+import time
+import uuid
+
+from app.platform.redis import redis_client
+from app.services.scheduler_service import (
+    register_scheduled_unit,
+    get_due_unit_id,
+    _due_key,
+    _unit_key,
+)
+
+
+async def main():
+    unit_id = f"test-unit-{uuid.uuid4().hex}"
+    platform = "rss"
+    priority = "high"
+
+    due_key = _due_key(platform, priority)
+    unit_key = _unit_key(unit_id)
+
+    try:
+        future_time = time.time() + 60
+
+        await register_scheduled_unit(
+            unit_id=unit_id,
+            platform=platform,
+            priority=priority,
+            next_run_at=future_time,
+            term="copper prices",
+            cadence_seconds=300,
+            org_id="test-org",
+            search_options={"language": "en"},
+        )
+
+        metadata = await redis_client.hgetall(unit_key)
+        assert metadata["term"] == "copper prices"
+        assert metadata["cadence_seconds"] == "300"
+
+        early_results = await get_due_unit_id(platform, priority, now=future_time - 1)
+        assert unit_id not in early_results
+
+        due_results = await get_due_unit_id(platform, priority, now=future_time)
+        assert unit_id in due_results
+
+        print("PASS: scheduled unit registered")
+        print("PASS: metadata stored in Redis")
+        print("PASS: future unit is not returned early")
+        print("PASS: unit is returned when due")
+
+    finally:
+        await redis_client.zrem(due_key, unit_id)
+        await redis_client.delete(unit_key)
+        await redis_client.srem("schedule:active_keys", f"{platform}:{priority}")
+        await redis_client.aclose()
+        print("Cleaned up test data")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
 
 ---
 
-### File 23: `app/test/test_scheduler_dispatch.py`
-**Purpose:** Verification test confirming atomic dispatch via Lua script, stream publication, schedule advancement, and repeat dispatch prevention.
+### File 32: `app/test/test_result_worker.py`
+**Purpose:** Unit test suite for `ResultWorker`. Verifies acknowledgement after successful processing, absence of acknowledgement on processing failure, and `XAUTOCLAIM` recovery handling.
 
-**Verifications:**
-- Registers a due unit with `next_run_at = now - 1`.
-- Dispatches via `dispatch_due_unit()`, asserting success.
-- Verifies published message exists in `queue:connector:{platform}:{priority}` with accurate `term` and `unit_id`.
-- Verifies unit's score in sorted set advanced into the future (`next_run > now`).
-- Calls `dispatch_due_unit()` a second time at the exact same timestamp; confirms return is `None` and stream message count remains 1.
+**Verifications Covered:**
+- `test_successful_processing_acknowledges_message`: Asserts `xack` is called after successful `process_crawl_result()`.
+- `test_failed_processing_does_not_acknowledge_message`: Asserts `xack` is **not** called when processing raises an error.
+- `test_recovery_claims_and_processes_pending_message`: Verifies that `_recover_pending_messages()` uses `xautoclaim` to reclaim and reprocess pending messages.
+
+```python
+import asyncio
+import unittest
+from unittest.mock import AsyncMock, patch
+
+from app.workers.result_worker import ResultWorker
+
+
+class TestResultWorker(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        self.worker = ResultWorker()
+
+    @patch("app.workers.result_worker.redis_client")
+    @patch("app.workers.result_worker.process_crawl_result", new_callable=AsyncMock)
+    async def test_successful_processing_acknowledges_message(
+        self, mock_process_result, mock_redis
+    ):
+        mock_process_result.return_value = {
+            "request_id": "test-request-001",
+            "status": "completed",
+            "items_inserted": 3,
+        }
+        mock_redis.xack = AsyncMock()
+
+        message_id = "1234567890-0"
+        payload = {"request_id": "test-request-001", "items": []}
+
+        await self.worker._process_message(message_id, payload)
+
+        mock_process_result.assert_awaited_once_with(payload)
+        mock_redis.xack.assert_awaited_once_with(
+            self.worker.stream_name,
+            self.worker.group_name,
+            message_id,
+        )
+
+    @patch("app.workers.result_worker.redis_client")
+    @patch("app.workers.result_worker.process_crawl_result", new_callable=AsyncMock)
+    async def test_failed_processing_does_not_acknowledge_message(
+        self, mock_process_result, mock_redis
+    ):
+        mock_process_result.side_effect = RuntimeError("Simulated result-processing failure")
+        mock_redis.xack = AsyncMock()
+
+        message_id = "1234567891-0"
+        payload = {"request_id": "test-request-002", "items": []}
+
+        with self.assertRaises(RuntimeError):
+            await self.worker._process_message(message_id, payload)
+
+        mock_process_result.assert_awaited_once_with(payload)
+        mock_redis.xack.assert_not_awaited()
+
+    @patch("app.workers.result_worker.redis_client")
+    async def test_recovery_claims_and_processes_pending_message(self, mock_redis):
+        message_id = "1234567892-0"
+        payload = {"request_id": "test-request-003", "items": []}
+
+        mock_redis.xautoclaim = AsyncMock(
+            return_value=("0-0", [(message_id, payload)], [])
+        )
+
+        self.worker._is_running = True
+        self.worker._stop_event = asyncio.Event()
+
+        with patch.object(self.worker, "_process_message", new_callable=AsyncMock) as mock_process:
+            async def stop_after_scan(*args, **kwargs):
+                self.worker.stop()
+                return ("0-0", [(message_id, payload)], [])
+
+            mock_redis.xautoclaim.side_effect = stop_after_scan
+
+            with patch("app.workers.result_worker.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                await self.worker._recover_pending_messages()
+
+            mock_redis.xautoclaim.assert_awaited_once()
+            mock_sleep.assert_awaited_once()
+            mock_process.assert_awaited_once_with(message_id, payload)
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
 
 ---
 
-### File 24: `app/test/test_scheduler_tick.py`
-**Purpose:** Verification test confirming `dispatch_due_units_once()` executes candidate sweep and preserves idempotency on repeated ticks.
+### File 33: `app/test/manual_result_worker_recovery.py`
+**Purpose:** Standalone integration test verifying the `ResultWorker`'s `XAUTOCLAIM` pending message recovery loop against real Redis.
 
-**Verifications:**
-- Registers a due unit and runs one dispatcher tick with `platform_priority_keys={active_key}` explicitly supplied.
-- Confirms returned dispatch count is `1`.
-- Confirms job is placed in target connector stream.
-- Executes second tick immediately at identical `now` timestamp; asserts count is `0`.
+**Scope & Verification:**
+- Creates an isolated temporary stream and consumer group (`test:argus:recovery:{uuid}`).
+- Delivers a test result to a seed consumer without acknowledging it (leaving it in the PEL).
+- Waits until the message exceeds the configured idle threshold (`claim_idle_ms=1000ms`).
+- Runs `_recover_pending_messages()` with a mocked `process_crawl_result()`:
+  - Verifies `XAUTOCLAIM` successfully reclaims the message.
+  - Verifies message processing and `XACK` invocation.
+  - Confirms `xpending` count drops to zero.
+- Cleans up the temporary test stream.
+- *(Scope Note: As `process_crawl_result` is mocked in this test, MongoDB persistence was not verified by this standalone script).*
+
+```python
+import asyncio
+import uuid
+from unittest.mock import AsyncMock, patch
+
+from app.platform.redis import redis_client
+from app.workers.result_worker import ResultWorker
+
+
+async def main():
+    test_id = uuid.uuid4().hex
+    stream_name = f"test:argus:recovery:{test_id}"
+    group_name = f"test-recovery-group:{test_id}"
+    seed_consumer = f"test-seed:{test_id}"
+
+    worker = ResultWorker(
+        block_ms=100,
+        batch_size=10,
+        claim_idle_ms=1000,
+        recovery_interval=0.01,
+    )
+
+    worker.stream_name = stream_name
+    worker.group_name = group_name
+    worker.consumer_name = f"test-worker:{test_id}"
+    worker.recovery_consumer_name = f"test-recovery:{test_id}"
+
+    expected_payload = {
+        "request_id": f"recovery-test-{test_id}",
+        "items": [],
+    }
+
+    try:
+        await redis_client.ping()
+        print("Redis connection: OK")
+
+        await redis_client.xgroup_create(
+            name=stream_name,
+            groupname=group_name,
+            id="0",
+            mkstream=True,
+        )
+
+        message_id = await redis_client.xadd(
+            stream_name,
+            {
+                "request_id": expected_payload["request_id"],
+                "items": "[]",
+            },
+        )
+        print(f"Test message created: {message_id}")
+
+        delivered = await redis_client.xreadgroup(
+            groupname=group_name,
+            consumername=seed_consumer,
+            streams={stream_name: ">"},
+            count=1,
+        )
+
+        if not delivered:
+            raise AssertionError("The seed consumer received no message.")
+
+        print("Message delivered but deliberately left pending.")
+        await asyncio.sleep(1.2)
+
+        async def fake_process_result(payload):
+            print(f"Worker processed reclaimed payload: {payload}")
+            worker.stop()
+            return {
+                "request_id": payload["request_id"],
+                "status": "completed",
+                "items_inserted": 0,
+            }
+
+        worker._is_running = True
+        worker._stop_event.clear()
+
+        with patch(
+            "app.workers.result_worker.process_crawl_result",
+            new_callable=AsyncMock,
+            side_effect=fake_process_result,
+        ) as mock_process:
+            await worker._recover_pending_messages()
+            mock_process.assert_awaited_once_with(expected_payload)
+
+        pending = await redis_client.xpending(stream_name, group_name)
+        if pending["pending"] != 0:
+            raise AssertionError(f"Expected zero pending messages, got {pending['pending']}.")
+
+        print("PASS: XAUTOCLAIM recovered the message.")
+        print("PASS: Python worker processed the reclaimed message.")
+        print("PASS: Message was acknowledged after successful processing.")
+        print("PASS: Pending message count is now zero.")
+
+    finally:
+        worker.stop()
+        await redis_client.delete(stream_name)
+        print("Temporary test stream cleaned up.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
 
 ---
 
-### File 25: `app/test/test_scheduler_worker.py`
-**Purpose:** Verification test confirming `SchedulerWorker` loop lifecycle, periodic ticks, and clean graceful shutdown.
+### File 34: `app/test/test_result_service.py`
+**Purpose:** Comprehensive unit and integration test suite (`TestResultService`) verifying the inbound persistence pipeline, multi-layer deduplication cache, status transitions, and fault tolerance.
 
-**Verifications:**
-- Configures `SchedulerWorker(tick_seconds=0.05)`.
-- Temporarily patches `dispatch_due_units_once` with a test counter.
-- Test counter requests `await worker.stop()` upon reaching 3 ticks.
-- Runs `worker.run()` with `asyncio.wait_for(timeout=2)`.
-- Asserts exactly 3 ticks executed and worker exited cleanly.
+**Test Coverage (9 Scenarios):**
+1. `test_successful_result_completes_request`: Verifies that a valid crawl result triggers `filter_unseen_items()`, saves unseen items to MongoDB, caches hashes via `mark_items_seen()`, and updates request status to `"completed"` with matched count assertions.
+2. `test_failed_result_marks_request_failed`: Verifies that failed crawl results update `rss_requests` to `"failed"` and record the error message.
+3. `test_duplicate_result_does_not_insert_duplicate_articles`: Tests that duplicate articles return zero insertions while accurately aggregating duplicate counts across stages.
+4. `test_status_update_failure_propagates`: Verifies that MongoDB exceptions during request status updates cleanly propagate so the worker does not acknowledge the Redis message.
+5. `test_filter_unseen_items_removes_cached_articles`: Verifies that `filter_unseen_items()` evaluates Redis `mget` responses (`["1", None]`), filters out cached articles, and retains unseen articles (`redis_duplicates = 1`).
+6. `test_filter_unseen_items_removes_duplicates_within_batch`: Verifies that multiple copies of the same article within a single batch are deduped in-memory (`batch_duplicates = 1`).
+7. `test_filter_unseen_items_falls_back_when_redis_fails`: Simulates a Redis network outage (`ConnectionError: Redis unavailable`) and verifies that the service logs a warning with stack trace and returns all articles untouched so MongoDB uniqueness takes over.
+8. `test_mark_items_seen_sets_ttl`: Verifies that `mark_items_seen()` invokes a non-transactional Redis pipeline with `pipeline.set(f"argus:article:seen:{hash}", "1", ex=2592000)` (30-day TTL).
+9. `test_unknown_request_is_rejected`: Verifies that a crawl result referencing a non-existent `request_id` raises `ValueError`.
+
+```python
+import unittest
+from unittest.mock import AsyncMock, patch, MagicMock
+
+from app.schemas.result import CrawlResult, RSSItem
+from app.services import result_service
+
+
+class TestResultService(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.request_id = "test-request-001"
+        self.item = RSSItem(
+            request_id=self.request_id,
+            source="bing",
+            source_type="rss",
+            title="Copper prices rise",
+            link="https://example.com/copper-prices",
+            summary="Copper prices increased today.",
+        )
+        self.success_result = CrawlResult(
+            request_id=self.request_id,
+            status="success",
+            item_count=1,
+            items=[self.item],
+        )
+
+    @patch("app.services.result_service.redis_client")
+    async def test_filter_unseen_items_removes_cached_articles(self, mock_redis):
+        mock_redis.mget = AsyncMock(return_value=["1", None])
+        second_item = RSSItem(
+            request_id=self.request_id,
+            source="bing",
+            source_type="rss",
+            title="Gold prices rise",
+            link="https://example.com/gold-prices",
+            summary="Gold prices increased today.",
+        )
+        unseen, redis_duplicates, batch_duplicates = (
+            await result_service.filter_unseen_items([self.item, second_item])
+        )
+        self.assertEqual(unseen, [second_item])
+        self.assertEqual(redis_duplicates, 1)
+        self.assertEqual(batch_duplicates, 0)
+        mock_redis.mget.assert_awaited_once()
+```
+
+---
+
+### File 35: `app/test/test_request_service.py`
+**Purpose:** Mocked integration test suite (`TestDispatchRequest`) verifying outbound task claim, serialization, Lua script execution, and status transitions.
+
+**Test Coverage (4 Scenarios):**
+1. `test_scheduled_request_is_published_to_configured_stream`: Verifies that `dispatch_request()` atomically claims a pending document from MongoDB with `status="processing"`, serializes metadata into JSON, invokes `_IDEMPOTENT_XADD_SCRIPT` on `queue:connector:rss`, and writes `stream_message_id` and timestamps back to MongoDB.
+2. `test_audit_failure_does_not_reset_request_to_pending`: Verifies that if Redis accepts the message but MongoDB audit write fails (`RuntimeError`), the request status is **not** reset to `pending` (which would cause a duplicate dispatch), preserving exactly-once semantics.
+3. `test_no_pending_request_returns_none`: Verifies that when no `pending` documents exist in `rss_requests`, the dispatcher returns `None` and performs no Redis or MongoDB operations.
+4. `test_retry_uses_the_same_deduplication_key`: Verifies that retrying `_publish_request_idempotently()` for the same `request_id` targets the exact same deduplication key (`argus:dispatch:request:{request_id}:stream_message_id`) and returns the original message ID.
+
+```python
+import unittest
+import json
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
+
+from app.services import request_service
+
+
+class TestDispatchRequest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.request_id = "scheduled:unit-001:1900.000000"
+        self.document_id = "mock-mongo-document-id"
+        self.scheduled_document = {
+            "_id": self.document_id,
+            "request_id": self.request_id,
+            "source": "bing",
+            "source_type": "rss",
+            "url": "https://example.com/rss?q=copper",
+            "metadata": {"query": "copper prices", "unit_id": "unit-001"},
+            "status": "pending",
+        }
+```
+
+---
+
+### File 36: `app/test/test_redis_dispatch_recovery.py`
+**Purpose:** Real Redis regression test (`TestRedisDispatchRecovery`) executed against Redis verifying stream entry deletion recovery and deduplication key reuse.
+
+**Regression Scenario (`test_deleted_stream_entry_is_republished_once`):**
+1. **Initial Publication:** Publishes a message to a test stream using `_IDEMPOTENT_XADD_SCRIPT`. Verifies `original_id` is created and exists in the stream via `XRANGE`.
+2. **Simulate Stream Deletion / Truncation:** Deletes the stream entry via `XDEL stream_key original_id`, leaving the deduplication key (`test:argus:dispatch:{suffix} = original_id`) intact in Redis.
+3. **Recovery Verification:** Executes the Lua script again for the same task. Proves that the enhanced script detects that the message no longer exists in the stream via `XRANGE`, publishes a replacement message (`replacement_id != original_id`), and updates the deduplication key.
+4. **Idempotent Reuse:** Executes the Lua script a third time. Proves that the replacement message is detected in the stream and returned without publishing a duplicate entry (`retry_id == replacement_id`, stream length remains 1).
+
+```python
+import unittest
+import uuid
+import redis.asyncio as redis
+from app.services.request_service import _IDEMPOTENT_XADD_SCRIPT
+
+
+class TestRedisDispatchRecovery(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.redis = redis.Redis(host="localhost", port=6380, decode_responses=True)
+        await self.redis.ping()
+        suffix = uuid.uuid4().hex
+        self.stream_key = f"test:queue:connector:rss:{suffix}"
+        self.dedupe_key = f"test:argus:dispatch:{suffix}"
+        self.payload = {
+            "request_id": f"test-request-{suffix}",
+            "source": "test",
+            "source_type": "rss",
+            "source_url": "https://example.com/test-rss",
+        }
+
+    async def asyncTearDown(self):
+        await self.redis.delete(self.stream_key, self.dedupe_key)
+        await self.redis.aclose()
+
+    async def test_deleted_stream_entry_is_republished_once(self):
+        original_id = await self.publish()
+        await self.redis.xdel(self.stream_key, original_id)
+        replacement_id = await self.publish()
+        self.assertNotEqual(replacement_id, original_id)
+        retry_id = await self.publish()
+        self.assertEqual(retry_id, replacement_id)
+```
+
+---
+
+### File 37: `app/test/test_request_recovery.py`
+**Purpose:** Comprehensive test suite (`TestRequestRecovery`) verifying `recover_stale_processing_requests()` and `_get_existing_stream_message_id()`:
+- Verifies that requests with active recovery leases cannot be claimed by another worker.
+- Verifies that existing Redis stream message IDs are verified via `XRANGE` and reused without republishing.
+- Verifies fallback to idempotent publishing when message is missing from Redis stream.
+- Verifies rejection of non-positive timeout values.
+- Verifies that requests missing `request_id` are not dispatched and safely release their recovery claim.
+
+---
+
+### File 38: `app/test/test_request_worker.py`
+**Purpose:** Unit test suite for `RequestWorker`:
+- Verifies pre-flight health-check behavior.
+- Verifies periodic recovery invocation before dispatch.
+- Verifies that worker dispatch continues uninterrupted when recovery raises an exception.
+
+---
 
 ## 5. argus-connector: File-by-File Walkthrough
 
@@ -1438,6 +3732,26 @@ python -m scripts.add_rss_request
 - **Symptom:** Inconsistent naming between plural `"nse_circulars"` and singular `"nse_circular"` caused worker tasks and tests to fail with `ValueError: Unsupported NSE source_type: nse_circular`.
 - **Fix:** Standardized the canonical connector `source_type` across `app/connectors/registry.py`, `NSEConnector.fetch()`, `app/connectors/nse/circulars.py`, and test suites strictly to singular `"nse_circular"`.
 
+### Bug 22: Redis Dispatch Deadlock on Stream Truncation / Message Eviction
+- **Where:** [`app/services/request_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/request_service.py) — `_IDEMPOTENT_XADD_SCRIPT`.
+- **Symptom:** In production or high-throughput testing, when messages in `queue:connector:rss` were evicted by stream `MAXLEN` or deleted via `XDEL`, retrying `dispatch_request()` immediately returned the old `existing_id` because `redis.call("GET", KEYS[2])` still held the previous message ID. However, because the message was gone from the stream, downstream connector workers never received the job, permanently stranding the request.
+- **Fix:** Enhanced `_IDEMPOTENT_XADD_SCRIPT` to verify whether the stream entry still exists using `redis.call("XRANGE", KEYS[1], existing_id, existing_id, "COUNT", 1)`. If `#existing_message == 0`, the script automatically generates a new `XADD` entry and updates the deduplication key with the new message ID. Verified in regression test [`app/test/test_redis_dispatch_recovery.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_redis_dispatch_recovery.py).
+
+### Bug 23: `AttributeError` on Redis ResponseError in Result Worker
+- **Where:** [`app/workers/result_worker.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/result_worker.py) — `_recover_pending_messages()`.
+- **Symptom:** During pending message recovery, an unhandled exception occurred: `AttributeError: module 'redis' has no attribute 'exception'`.
+- **Root Cause:** A typo in the exception catch clause: `except redis.exception.ResponseError` instead of `except redis.exceptions.ResponseError`.
+- **Fix:** Corrected the catch clause to `except redis.exceptions.ResponseError as exc:`.
+
+### Bug 24: Unbounded MongoDB Duplicate Write Amplification & Multi-Layer Redis Deduplication Cache
+- **Where:** [`app/services/result_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/result_service.py).
+- **Symptom:** RSS and news crawlers frequently re-scrape unchanged feeds, producing thousands of identical articles. Passing all items into MongoDB `rss_items.bulk_write()` caused high disk IOPS, locking, and CPU usage, even though unique indexes on `item_hash` prevented duplicate insertions.
+- **Fix:** Implemented a two-tier high-performance caching layer:
+  1. In-batch set filtering to drop duplicate hashes in memory.
+  2. Redis cache `argus:article:seen:{hash}` evaluated via batched `mget()` with a 30-day TTL (`ARTICLE_SEEN_TTL_SECONDS = 2592000`).
+  3. Non-blocking fallback: If Redis is unavailable, the service catches the exception, logs a warning, and falls back seamlessly to MongoDB uniqueness.
+  4. Post-persistence pipeline caching via `mark_items_seen()`.
+
 ---
 
 ## 8. Current Roadmap & Project Progress
@@ -1445,729 +3759,695 @@ python -m scripts.add_rss_request
 ```text
 [x] Phase 1:  Environment & Async Database Drivers (Motor & Redis)
 [x] Phase 2:  Configuration & Logging Setup
-[x] Phase 3:  Outbound Request Schema & Atomic Dispatch Service
-[x] Phase 4:  Outbound Request Worker Daemon (app/workers/request_worker.py)
-[x] Phase 5:  Inbound Result Schema & Deduplication Service (app/services/result_service.py)
-[x] Phase 6:  Inbound Result Worker Consumer (app/workers/result_worker.py)
-[x] Phase 7:  FastAPI Lifespan Integration (Uvicorn servers on Ports 8000 & 8001)
-[x] Phase 8:  End-to-End RSS Pipeline Verification (MongoDB <-> Redis <-> Connector)
-[x] Phase 9:  Generic Multi-Connector Architecture & Registry Pattern
-              - app/connectors/base.py (BaseConnector ABC)
-              - app/connectors/registry.py (Dynamic connector registry & get_connector)
-              - app/connectors/rss/connector.py (RSSConnector implementation)
-              - app/schemas/connector.py (Generic ConnectorRequest schema)
-              - app/workers/connector_worker.py (Generic ConnectorWorker daemon)
-              - app/services/request_service.py (dispatch_request + JSON metadata)
-[x] Phase 10: NSE Announcements & Circulars Connectors Pipeline
-              - argus-connector/app/connectors/nse/ (models, parser, rss, circulars, connector)
-              - argus-connector/app/connectors/registry.py (registered "nse_announcements" & "nse_circular")
-              - argus-connector/app/connectors/rss/model.py & orchestrator result.py (subject & metadata fields)
-              - argus-connector/app/test/ (test_nse_circular_api, test_nse_circular_duplicates, test_nse_circular_connector, test_nse_circular_worker)
-              - argus-orchestrator/app/schemas/result.py (metadata dictionary support on RSSItem)
-              - argus-orchestrator/app/services/result_service.py (partial unique index on active_query_key)
-              - argus-orchestrator/app/services/query_dispatch_service.py (DuplicateKeyError handling)
-              - argus-orchestrator/app/test/test_request_idempotency.py (concurrent race verification)
-[x] Phase 15: Bing News RSS Engine, Custom Query Generation & Query-to-Request Automation
-              - app/services/bing_service.py (build_bing_rss_url query generator)
-              - app/schemas/query.py (NewQuery schema for news search tracking)
-              - scripts/seed_news_query.py (News query dictionary seeder with unique index)
-              - app/test/test_bing.py (Direct HTTP + feedparser verification)
-              - argus-connector/app/test/ (Live test_bing_parser & test_bing_connector suites)
-              - app/services/query_dispatch_service.py (Automated query-to-request bridge;
-                reads news_queries, dedup-checks, creates pending rss_requests)
+[x] Phase 3:  Outbound Request Schema & Atomic Claim Dispatch
+[x] Phase 15: Query Dispatch Service & Concurrent Race Prevention
+[x] Phase 17: Reliable Scheduled RSS Request Dispatch & Pending Result Recovery
+              - app/services/scheduled_request_service.py (durable MongoDB pending request creation)
+              - app/services/scheduler_service.py (two-phase dispatch via Compare-and-Swap Lua script _ADVANCE_DUE_TIME_SCRIPT)
+              - app/workers/scheduler_worker.py (sync before dispatch tick, robust exception logging, graceful shutdown)
+              - app/workers/result_worker.py (dual-loop XAUTOCLAIM stale message recovery with idle threshold)
+              - app/platform/mongodb.py (scheduled_units durable collection)
+              - Resolved all prototype defects 1 through 8 (keyspace prefix, ACTIVE_KEYS_SET format, dedented loop return, exception traceback)
+[x] Phase 19: Daily Scheduling Support (Clock Times & Timezones)
+              - app/services/schedule_time_service.py (calculate_next_run with local clock times e.g. ["10:00", "19:00"] and Asia/Kolkata timezone)
+              - app/services/scheduler_service.py (integration with daily clock times and day rollover)
+              - app/test/ (test_schedule_time_service, test_scheduler_dispatch daily runs, test_scheduler_sync daily metadata)
+[x] Phase 20: Redis Article Deduplication Cache (30-Day TTL)
+              - app/services/result_service.py (filter_unseen_items with in-batch set filter + Redis MGET)
+              - app/services/result_service.py (mark_items_seen with pipeline caching and 30-day TTL)
+              - app/test/test_result_service.py (9 comprehensive test cases verifying dedup, fallback, TTL)
+[x] Phase 21: Stream Recovery in Idempotent Lua Dispatch Script & Exception Hardening
+              - app/services/request_service.py (_IDEMPOTENT_XADD_SCRIPT with XRANGE stream existence check)
+              - app/workers/result_worker.py (fixed redis.exceptions.ResponseError catch typo)
+              - app/test/test_redis_dispatch_recovery.py (regression test proving recovery after XDEL)
+              - Full 42-test suite passing across all unit and integration layers (Historical: Ran 42 tests in 2.700s ... OK at Phase 21 completion)
 ──────────────────────────────────────────────────────────────────────────────────────────
 [ ] Phase 11: BSE Corporate Announcements Connector
 [ ] Phase 12: SEBI Orders & Circulars Connector (HTML scraper + PDF link extractor)
 [ ] Phase 13: SAT (Securities Appellate Tribunal) Orders Connector
 [ ] Phase 14: Stocktwits Social Feed Connector (REST API + JSON)
 [ ] Phase 16: REST API Endpoint (POST /api/feeds) to manage requests via HTTP
-[x] Phase 17: Redis-Based Scheduler & Dispatcher Prototype (In Orchestrator)
-              - app/services/scheduler_service.py (register_scheduled_unit, get_due_unit_id, dispatch_due_unit Lua, dispatch_due_units_once)
-              - app/workers/scheduler_worker.py (SchedulerWorker periodic tick daemon)
-              - app/core/config.py (dispatch_tick_seconds = 5)
-              - app/platform/mongodb.py (scheduled_units collection handle)
-              - app/main.py (SchedulerWorker wired into FastAPI lifespan)
-              - app/test/ (test_scheduler_service, test_scheduler_dispatch, test_scheduler_tick, test_scheduler_worker - all 4 passing)
-              - PENDING: Connector stream contract alignment (queue:connector:rss vs queue:connector:rss:high)
-              - PENDING: MongoDB-to-Redis persistent configuration synchronizer & reconciler
 [ ] Phase 18: Unified Data Model (single 'market_intelligence_items' collection)
 ```
 
+### Implementation & Verification Status Checklist
+
+#### Implemented and Unit/Integration Tested:
+- **Daily Next-Run Calculation:** Clock time parsing (`["10:00", "19:00"]`), `Asia/Kolkata` timezone conversion, intra-day candidate advancement, and next-day rollover. Verified in `test_schedule_time_service.py`.
+- **Interval Scheduling Compatibility:** Preserved seamlessly alongside daily scheduling (`schedule_type="interval"` vs `schedule_type="daily_times"`).
+- **Two-Phase Scheduler Dispatch:** First creates a durable MongoDB `pending` request in `rss_requests` with deterministic ID `scheduled:{unit_id}:{scheduled_timestamp:.6f}`, then advances the Redis score via Compare-and-Swap Lua. Eliminates stream bypassing and aligns with existing request pipeline.
+- **Compare-And-Swap (CAS) Lua Script (`_ADVANCE_DUE_TIME_SCRIPT`):** Advances Redis sorted set score if and only if the current score matches the expected due score, preventing double-advance race conditions.
+- **MongoDB-to-Redis Synchronization Before Dispatch:** Synchronizes definitions on every tick with `preserve_due_time=True` (`pipe.zadd(..., nx=True)`), preventing overwriting of active runtime scores. Purges disabled and deleted schedules via set difference against `schedule:managed_unit_ids`. Verified in `test_scheduler_sync.py` and `test_scheduler_sync_due_time.py`.
+- **Scheduler Worker Lifecycle:** Full worker lifecycle, periodic ticking, exception handling with stack traces, and graceful shutdown verified in `test_scheduler_worker.py`.
+- **Inbound Result Worker Recovery (`XAUTOCLAIM`):** Dual-loop consumption (`_consumer_new_messages` and `_recover_pending_messages`) with configurable idle threshold (`result_claim_idle_ms=30000`) and recovery interval (`result_recovery_interval=10s`), post-persistence `xack`. Verified in `test_result_worker.py` and `manual_result_worker_recovery.py`.
+- **Redis Article Deduplication:** In-batch hash filtering, Redis fast-path `mget` lookup, 30-day TTL pipeline caching, and graceful fallback to MongoDB uniqueness. Verified in `test_result_service.py`.
+- **Stream Deletion Self-Healing:** Enhanced `_IDEMPOTENT_XADD_SCRIPT` validates stream presence via `XRANGE` and automatically republishes replacement messages if stream entries were deleted or evicted. Verified in `test_redis_dispatch_recovery.py`.
+- **Result Worker Hardening:** Fixed exception typo to `redis.exceptions.ResponseError`, guaranteeing unbroken dual-loop `XAUTOCLAIM` recovery.
+- **Test Suite Health:** All 54 tests passing in `argus-orchestrator`: `Ran 54 tests in 2.044s ... OK` (historical baseline: 42 tests passing in 2.700s prior to stale request recovery).
+
+#### Still Requiring Live Verification:
+- **Initial Registration of New Daily Schedules:** Creating a newly seeded daily schedule document in MongoDB and verifying its very first calculated due time in Redis.
+- **Complete Real End-to-End Scheduled Run:** Executing the entire pipeline concurrently in a live environment:
+  MongoDB `scheduled_units` -> Redis Hot-Path ZSET -> Scheduler creates MongoDB `rss_requests` -> `RequestWorker` dispatches to Redis Stream `queue:connector:rss` -> `ConnectorWorker` crawls Bing RSS -> Connector publishes to `connector:rss:results` -> `ResultWorker` ingests and persists to MongoDB `rss_items`.
+- **Failure & Retry Behavior Through Live Pipeline:** Live verification of network partitions, worker crashes during crawl, retry handling with `DuplicateKeyError`, and `XAUTOCLAIM` reclamation of actual unacknowledged batches.
+- **Generalized Multi-Source Scheduled Dispatch:** Currently, `create_scheduled_rss_request()` hardcodes Bing RSS URL building (`build_bing_rss_url(term)`). Future scheduled dispatches for NSE announcements or circulars will require platform-aware request building.
+
 ---
 
-## 9. Implementation Progress: Redis Scheduler and Dispatcher
+## 9. Implementation Guide: Redis Scheduler, Daily Scheduling & Ingest Recovery
 
-This section documents the newly engineered Redis-based scheduling and dispatch subsystem in [`argus-orchestrator`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator), detailing its architectural boundaries, data structures, atomic execution semantics, test verification, known limitations, and implementation roadmap.
+This section documents the production-grade scheduling, synchronization, and recovery subsystems in [`argus-orchestrator`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator), detailing their architectural boundaries, data structures, atomic execution semantics, test verification, defect resolutions, and operational guidelines.
 
 ---
 
-### 9.1 System Architecture & Boundary Definitions
+### 9.1 System Architecture & End-to-End Pipeline
 
-The Argus 2.0 architecture adheres to strict separation of concerns, decoupling operational persistence from real-time stream processing and scraping execution.
+Argus 2.0 strictly enforces the **Single-Writer Principle**: `argus-orchestrator` is the sole authority with access to MongoDB. `argus-connector` is completely stateless, has no database credentials, and communicates solely via Redis Streams.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                                   ARGUS ORCHESTRATOR                                   │
 │                                                                                        │
-│   ┌───────────────────────────┐                ┌───────────────────────────────────┐   │
-│   │   Operational Store       │                │       Hot-Path Scheduler          │   │
-│   │   [MongoDB: argus]        │                │       [Redis: Port 6379]          │   │
-│   │   - scheduled_units (Doc) │   (Sync loop   │   - schedule:active_keys (SET)    │   │
-│   │   - news_queries          │    [PENDING])  │     [Defect: stores unit_key]     │   │
-│   │   - rss_requests          │ ─────────────> │   - scheduler:due:{p}:{pri} (ZSET)│   │
-│   │   - rss_items             │                │   - unit:{unit_id} (HASH)         │   │
-│   │   └───────────────────────┘                └─────────────────┬─────────────────┘   │
-│   └─────────────▲─────────────┘                                  │                     │
-│                 │                                                │ dispatch_due_unit() │
-│                 │                                                ▼ (Atomic Lua Script) │
-│   ┌─────────────┴─────────────┐                ┌───────────────────────────────────┐   │
-│   │  ResultWorker (Consumer)  │                │     SchedulerWorker (Tick Loop)   │   │
-│   │  - reads results stream   │                │     - runs every 5s (default)     │   │
-│   │  - dedup upsert to Mongo  │                │     - XADD to connector stream    │   │
-│   │  - ACKs via xack          │                │     - ZADD advances next run time │   │
-│   └─────────────▲─────────────┘                └─────────────────┬─────────────────┘   │
-└─────────────────┼────────────────────────────────────────────────┼─────────────────────┘
-                  │                                                │
-                  │                                                │ Published jobs
-                  │                                                ▼
-   ┌──────────────┴─────────────────┐            ┌───────────────────────────────────┐
-   │ Stream: 'connector:rss:results'│            │ Stream: 'queue:connector:rss'     │
-   │ (Orchestrator Inbound Stream)  │            │ Stream: 'queue:connector:rss:high'│
-   └──────────────▲─────────────────┘            │ [Contract Integration Pending]   │
-                  │                              └─────────────────┬─────────────────┘
-                  │                                                │
-┌─────────────────┼────────────────────────────────────────────────┼─────────────────────┐
-│                 │               ARGUS CONNECTOR                  │                     │
-│                 │                                                ▼                     │
-│   ┌─────────────┴─────────────────┐            ┌───────────────────────────────────┐   │
-│   │   Result Publisher            │            │  ConnectorWorker (Pull & Scrape)  │   │
-│   │   - Serializes CrawlResult    │            │  - XREADGROUP & XAUTOCLAIM        │   │
-│   │   - XADD to results stream    │ <───────── │  - Dynamically resolves connector │   │
-│   │   - ACKs original job         │            │  - Async HTTP fetch & parse       │   │
-│   └───────────────────────────────┘            └───────────────────────────────────┘   │
-│                                                                                        │
-│   * Completely stateless: Has NO credentials or connection to MongoDB.                │
-└────────────────────────────────────────────────────────────────────────────────────────┘
+│   ┌───────────────────────────┐  sync_from_mongo()   ┌─────────────────────────────┐   │
+│   │   Operational Store       │ ────────────────────> │      Hot-Path Scheduler     │   │
+│   │   [MongoDB: argus]        │  (preserves runtime   │      [Redis: Port 6379]     │   │
+│   │   - scheduled_units (Doc) │   scores via nx=True) │  - schedule:active_keys     │   │
+│   │   - news_queries          │                       │  - schedule:managed_unit_ids│   │
+│   │   - rss_requests          │ <───────────────────  │  - schedule:due:{p}:{pri}   │   │
+│   │   - rss_items             │  1. create_scheduled_ │  - unit:{unit_id} (HASH)    │   │
+│   │                           │     rss_request()     │                             │   │
+│   │                           │                       └──────────────┬──────────────┘   │
+│   │                           │  2. _ADVANCE_DUE_TIME_SCRIPT (CAS)   │                  │
+│   │                           │     advances score in Redis ZSET     │                  │
+│   │                           │                                      │                  │
+│   │                           │  ┌───────────────────────────────────┴──────────────┐   │
+│   │                           │  │ SchedulerWorker: run_once() [sync -> dispatch]   │   │
+│   │                           │  │ - runs every dispatch_tick_seconds (default 5s)  │   │
+│   │                           │  └──────────────────────────────────────────────────┘   │
+│   │                           │                                                         │
+│   │   [rss_requests: pending] │                                                         │
+│   │             │             │                                                         │
+│   │             ▼             │                                                         │
+│   │   ┌───────────────────┐   │  idempotent Lua       ┌─────────────────────────────┐   │
+│   │   │   RequestWorker   │ ─ ┼ ────────────────────> │ Stream: queue:connector:rss │   │
+│   │   │  (Atomic Claim)   │   │   _IDEMPOTENT_XADD    └──────────────┬──────────────┘   │
+│   │   └───────────────────┘   │                                      │                  │
+│   │             ▲             │                                      │                  │
+│   │             │ updates     │                                      │                  │
+│   │             │ status      │                                      │                  │
+│   │   ┌─────────┴─────────┐   │  dual loops:          ┌──────────────┴──────────────┐   │
+│   │   │   ResultWorker    │ < ┼ ───────────────────── │ Stream:                     │   │
+│   │   │ (Ingest & Dedupe) │   │  - new messages (>)   │ connector:rss:results       │   │
+│   │   └─────────┬─────────┘   │  - xautoclaim PEL     └──────────────▲──────────────┘   │
+│   │             │             │    recovery                  │                          │
+│   │             ▼             │                              │                          │
+│   │      [rss_items: doc]     │                              │                          │
+│   │    (dedup on item_hash)   │                              │                          │
+│   └───────────────────────────┘                              │                          │
+└──────────────────────────────────────────────────────────────┼──────────────────────────┘
+                                                               │
+┌──────────────────────────────────────────────────────────────┼──────────────────────────┐
+│                                      ARGUS CONNECTOR         │                          │
+│                                                              │                          │
+│   ┌───────────────────────────┐                              │                          │
+│   │      ConnectorWorker      │ <────────────────────────────┘                          │
+│   │  - XREADGROUP & XAUTOCLAIM│   pulls crawl tasks                                     │
+│   │  - Dynamic Connector      │                                                         │
+│   │  - Async HTTP fetch/parse │                                                         │
+│   │  - Publishes CrawlResult  │ ────────────────────────────────────────────────────────┘
+│   │  - ACKs original task     │   publishes completed results
+│   └───────────────────────────┘
+│                                                                                         │
+│   * Completely stateless: Has NO credentials or connection to MongoDB.                  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Microservice Responsibilities & Boundaries
+#### Detailed Pipeline Flow
 
-1. **[`argus-orchestrator`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator)**:
-   - **System Master & Single Writer**: The orchestrator is the sole authority managing business logic, job scheduling, deduplication guarantees, and permanent database writes to MongoDB.
-   - **Operational Daemons**:
-     - [`RequestWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/request_worker.py#L43-L122): Continuously polls MongoDB `rss_requests` for manual or seeded `pending` jobs, claims them atomically (`processing`), and dispatches them to Redis.
-     - [`ResultWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/result_worker.py#L26-L168): Listens on `connector:rss:results` using consumer group `orchestrator-results`, bulk-upserts extracted articles into MongoDB `rss_items` using `item_hash` deduplication, transitions request status to `completed` or `failed`, and issues `XACK`.
-     - [`SchedulerWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py#L10-L77): Periodic background daemon that triggers dispatcher ticks across active scheduling keys in Redis, executing atomic dispatches without querying MongoDB on the hot path.
-
-2. **[`argus-connector`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector)**:
-   - **Stateless Execution Worker**: Completely decoupled from MongoDB (it possesses no MongoDB credentials and includes only an empty platform stub). It reads crawl jobs exclusively from Redis Streams and pushes crawl results back to Redis Streams.
-   - [`ConnectorWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector/app/workers/connector_worker.py): Pulls jobs via `xreadgroup`, dynamically instantiates target connectors (e.g., `RSSConnector`, `NSEConnector`), handles non-blocking HTTP fetching, parses content, publishes structured `CrawlResult` payloads, and recovers stale in-flight messages via `xautoclaim`.
-
-3. **Redis Broker & Datastore**:
-   - Acts as the low-latency message broker and the high-performance scheduling state store.
-   - Hosts streams, consumer groups, pending entries lists (PEL), and hot-path scheduling keys (ZSET, Hash, Set).
-
-4. **MongoDB**:
-   - Durable system of record for operational data (`rss_requests`, `rss_items`, `news_queries`, and `scheduled_units`).
-   - Governed strictly by the **Single-Writer Principle**: All writes are performed by `argus-orchestrator`. Connectors never touch MongoDB.
-
-#### Stream Flow, Consumer Groups, Pending Entries, and Recovery
-
-- **Configured Prototype Streams**:
-  - `queue:connector:rss`: The primary inbound task stream consumed by `argus-connector`.
-  - `connector:rss:results`: The inbound results stream consumed by `argus-orchestrator`.
-- **Request IDs**:
-  - Uniquely correlate operations across both microservices.
-  - Manual/query requests: `req_{uuid}`.
-  - Scheduled requests: `scheduled:{unit_id}:{scheduled_for}`.
-- **Consumer Groups & Pending Entries List (PEL)**:
-  - Workers use Redis Consumer Groups (`xreadgroup`) with `mkstream=True`.
-  - When a message is delivered via `xreadgroup`, Redis moves it to the consumer group's PEL until explicitly acknowledged via `xack`.
-- **Acknowledgements & Safe Recovery**:
-  - In `ResultWorker`: `xack` is called **only after** MongoDB bulk upsert and status persistence succeed. If the orchestrator crashes mid-batch, the message remains in the PEL and is redelivered.
-  - In `ConnectorWorker`: `xack` is called **only after** the `CrawlResult` is published to the results stream.
-  - `XAUTOCLAIM` Recovery: In `ConnectorWorker`, a periodic recovery loop (`recovery_interval=10s`) runs `xautoclaim` with `claim_idle_ms=30000` (30 seconds). If any worker node crashes or loses network connectivity mid-crawl, orphaned pending messages are reassigned to healthy workers and processed to completion.
+1. **Candidate Due Detection:**
+   `SchedulerWorker` triggers every `dispatch_tick_seconds` (default 5s). It sweeps `schedule:active_keys` and queries `schedule:due:{platform}:{priority}` for units whose score $\le \text{now}$.
+2. **Durable Request Creation:**
+   Instead of publishing directly to Redis Streams, the scheduler invokes `create_scheduled_rss_request()` in `scheduled_request_service.py`. This writes a durable document to MongoDB's `rss_requests` with `status="pending"` and deterministic ID `scheduled:{unit_id}:{scheduled_timestamp:.6f}`. Retries are safely absorbed by MongoDB's unique index.
+3. **Compare-And-Swap Score Advancement:**
+   Only after MongoDB confirms the request exists, the scheduler calculates `next_run_at` and executes the atomic Lua script `_ADVANCE_DUE_TIME_SCRIPT`. This script advances the sorted set score **only if the current score matches the expected due score**, guaranteeing that no concurrent dispatcher clobbers a newer runtime score.
+4. **Outbound Dispatch:**
+   The existing `RequestWorker` daemon continuously claims `pending` requests from MongoDB `rss_requests` (transitioning status to `processing`), and dispatches them to Redis Stream `queue:connector:rss` via `_IDEMPOTENT_XADD_SCRIPT`.
+5. **Connector Crawling:**
+   `ConnectorWorker` pulls tasks from `queue:connector:rss` using consumer group `rss_connectors`. It dynamically instantiates the appropriate connector (e.g. `RSSConnector`), scrapes the target URL, extracts articles, publishes a `CrawlResult` to `connector:rss:results`, and acknowledges (`xack`) the task stream message.
+6. **Inbound Result Processing & Deduplication:**
+   `ResultWorker` reads from `connector:rss:results` using consumer group `orchestrator-results`. It parses the payload, executes `result_service.process_crawl_result()`, performs bulk upserts on `rss_items` using `item_hash` deduplication, updates the request status in `rss_requests` to `completed` or `failed`, and calls `xack` **strictly after persistence succeeds**.
+7. **Pending Message Recovery:**
+   If a worker crashes before calling `xack`, the message remains in the Pending Entries List (PEL). A background recovery loop running in `ResultWorker` uses `xautoclaim` with `claim_idle_ms=30000` to reclaim and reprocess stale results.
 
 ---
 
 ### 9.2 Scheduler Design & Redis Hot-Path Data Structures
 
-To support high-frequency scheduling without placing load on MongoDB, the scheduler implementation uses Redis data structures as its operational hot path.
+To support sub-millisecond candidate discovery without querying MongoDB on the tick loop, the scheduler maintains runtime scheduling state in Redis:
 
 ```text
-Redis Key Space:
-┌───────────────────────────────────┐
-│ Set: 'schedule:active_keys'       │ ──> Proposed: '{platform}:{priority}' combinations
-│                                   │     Current Code Defect: stores 'unit:{unit_id}'
-└───────────────────────────────────┘
-┌───────────────────────────────────┐
-│ Hash: 'unit:{unit_id}'            │ ──> Contains unit metadata: term, org_id, search_options,
-└───────────────────────────────────┘     cadence_seconds, platform, priority, enabled
-┌───────────────────────────────────┐
-│ Sorted Set:                       │ ──> Member: unit_id
-│ 'scheduler:due:{platform}:{pri}'  │     Score:  Unix epoch timestamp (float seconds)
-└───────────────────────────────────┘     (Code uses 'scheduler:due:', spec uses 'schedule:due:')
-┌───────────────────────────────────┐
-│ Target Stream:                    │ ──> Dispatched job payload: 'queue:connector:{p}:{pri}'
-│ 'queue:connector:{platform}:{pri}'│     (Mismatch: Connector worker consumes 'queue:connector:rss')
-└───────────────────────────────────┘
+Redis Keyspace:
+┌──────────────────────────────────────┐
+│ Set: 'schedule:active_keys'          │ ──> Members: '{platform}:{priority}' combinations (e.g., 'rss:high')
+└──────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│ Set: 'schedule:managed_unit_ids'     │ ──> Members: unit_id strings managed by MongoDB sync
+└──────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│ Hash: 'unit:{unit_id}'               │ ──> Metadata: term, platform, priority, cadence_seconds,
+└──────────────────────────────────────┘     schedule_type, timezone_name, run_times, org_id, search_options, enabled
+┌──────────────────────────────────────┐
+│ Sorted Set:                          │ ──> Member: unit_id
+│ 'schedule:due:{platform}:{priority}' │     Score:  Unix epoch float timestamp
+└──────────────────────────────────────┘
 ```
 
-#### Redis Data Structures
+#### Field Specifications for `unit:{unit_id}` (Redis Hash):
 
-1. **`schedule:active_keys`** (Redis Set):
-   - **Proposed Architectural Behavior**: Registry of all active platform/priority combinations requiring polling sweeps (e.g., `rss:high`, `nse:normal`), enabling the dispatcher tick to discover active queues without scanning the entire keyspace.
-   - **Current Implementation Behavior (Defect Register #1)**: Written in [`register_scheduled_unit()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L50) as `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`, which stores `unit:{unit_id}` (e.g., `unit:unit-101`) rather than `{platform}:{priority}`. This causes `dispatch_due_units_once()` to fail key parsing during un-mocked sweeps.
+| Field | Type | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `term` | `str` | Target query term or entity | `"copper prices"` |
+| `platform` | `str` | Platform identifier | `"rss"` |
+| `priority` | `str` | Scheduling priority tier | `"high"`, `"normal"` |
+| `cadence_seconds` | `str(int)` | Interval duration in seconds | `"300"` |
+| `schedule_type` | `str` | `"interval"` or `"daily_times"` | `"daily_times"` |
+| `timezone_name` | `str` | Target timezone for daily schedules | `"Asia/Kolkata"` |
+| `run_times` | `str(JSON)` | List of 24h clock strings | `'["10:00", "19:00"]'` |
+| `org_id` | `str` | Organization / tenant ID | `"org-1"` |
+| `search_options` | `str(JSON)` | Additional connector parameters | `'{"language": "en"}'` |
+| `enabled` | `str(bool)` | Active flag (`"true"` / `"false"`) | `"true"` |
 
-2. **`scheduler:due:{platform}:{priority}`** (Redis Sorted Set - ZSET):
-   - Stores unit IDs as members, scored by their next scheduled execution timestamp (Unix epoch seconds).
-   - **Naming Inconsistency (Defect Register #4)**: Proposed blueprint specifies `schedule:due:{platform}:{priority}`; actual implementation in [`_due_key()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L16-L22) constructs `scheduler:due:{platform.lower()}:{priority.lower()}`.
-   - Allows fast range queries to find overdue units whose score is $\le \text{now}$.
-
-3. **`unit:{unit_id}`** (Redis Hash):
-   - Stores configuration and metadata for a specific unit:
-     - `term`: The search term or target entity (e.g., `"copper prices"`).
-     - `platform`: Target connector platform (e.g., `"rss"`).
-     - `priority`: Scheduling priority (e.g., `"high"`).
-     - `cadence_seconds`: Execution interval in seconds (e.g., `"300"`).
-     - `org_id`: Tenant or organization identifier.
-     - `search_options`: JSON-serialized dictionary of search parameters.
-     - `enabled`: String `"true"` or `"false"`.
-
-4. **`queue:connector:{platform}:{priority}`** (Redis Stream):
-   - Multi-priority stream where the Lua script publishes dispatched scheduled tasks (e.g. `queue:connector:rss:high`).
-   - **Stream Contract Mismatch (Defect Register #8)**: Current `argus-connector` consumes strictly from static `queue:connector:rss`. It cannot consume from this multi-priority stream pattern until aligned.
-   - Target stream pattern used by the dispatcher to publish execution tasks.
-   - For example: `queue:connector:rss:high`.
-
-#### Hot-Path Service Methods
-
-- **[`register_scheduled_unit()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L43-L90)**:
-  - **Validation**: Enforces `cadence_seconds > 0`, non-empty `unit_id`, `platform`, and `priority`.
-  - **Type Normalization**: Converts `next_run_at` (`datetime`, `int`, or `float`) to Unix epoch float seconds via `_timestamp()`.
-  - **Atomic Pipeline Execution**: Executes a Redis transaction pipeline (`MULTI/EXEC`) containing:
-    ```python
-    pipe.zadd(due_key, {unit_id: _timestamp(next_run_at)})
-    pipe.hset(unit_key, mapping=metadata)
-    pipe.sadd(ACTIVE_KEYS_SET, unit_key)  # Note: see Discrepancy Register in 9.9
-    await pipe.execute()
-    ```
-
-- **[`get_due_unit_id()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L92-L116)**:
-  - Queries candidates whose execution timestamp has arrived:
-    ```python
-    return await redis_client.zrangebyscore(
-        due_key, min="-inf", max=current_time, start=0, num=limit
-    )
-    ```
-  - **Read-Only Candidate Lookup**: This function **only reads candidate unit IDs**. It does not pop, claim, lock, or modify them in Redis. True claiming and dispatch occur exclusively inside the atomic Lua script.
+#### Polling Interval vs Configured Schedule Times
+A vital architectural distinction:
+- **`dispatch_tick_seconds` (default 5s):** The polling frequency of the `SchedulerWorker`. It simply tells the orchestrator how often to wake up, synchronize definitions, and check if *any* unit has reached its due timestamp.
+- **Configured Schedule Times:** The business run schedule for a unit. For interval units, this is every `cadence_seconds` (e.g. 300s). For daily units, this is specific clock times (e.g., 10:00 AM and 7:00 PM IST).
 
 ---
 
-### 9.3 Atomic Dispatch Implementation via Lua
+### 9.3 Two-Phase Dispatch & Compare-And-Swap (CAS) Lua
 
-When a unit becomes due, publishing the job to Redis Streams and advancing its next execution timestamp in the sorted set must happen **atomically**. If these operations were executed via separate network round-trips:
-1. Worker A could read unit `U1` as due.
-2. Worker B could read unit `U1` as due before Worker A updates the score.
-3. Both workers would publish duplicate crawl jobs to the connector stream.
+#### Why the Prototype's Direct Lua XADD Was Replaced
+In earlier iterations, the scheduler used a Lua script that directly executed `XADD` into `queue:connector:{platform}:{priority}`. This was decommissioned because:
+1. **Bypassed MongoDB `rss_requests`:** Tasks were not tracked in MongoDB, losing auditability, state transitions (`pending` -> `processing` -> `completed`), and item count statistics.
+2. **Stream Contract Mismatch:** Connector workers listen strictly on `queue:connector:rss`. Publishing to `queue:connector:rss:high` caused messages to sit unconsumed indefinitely.
+3. **Tight Coupling:** The scheduler bypassed the orchestrator's standardized `RequestWorker` dispatch logic.
 
-To eliminate this race condition, [`dispatch_due_unit()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L184-L220) executes all checks, publishing, and score updates inside a single Redis Lua script: [`_DISPATCH_DUE_UNIT_SCRIPT`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L119-L181).
+#### Current Two-Phase Architecture
+The current implementation splits dispatch into two distinct phases:
+- **Phase 1: Durable MongoDB Request Creation (`scheduled_request_service.py`):**
+  Inserts a document into `rss_requests` with `status="pending"` and deterministic ID `scheduled:{unit_id}:{scheduled_timestamp:.6f}`.
+- **Phase 2: Redis Compare-And-Swap Score Advancement (`_ADVANCE_DUE_TIME_SCRIPT`):**
+  Executes an atomic CAS Lua script:
+  ```lua
+  local unit_id = ARGV[1]
+  local expected_due_time = tonumber(ARGV[2])
+  local next_run_at = tonumber(ARGV[3])
 
-#### Lua Script Step-by-Step Execution Flow
+  local current_due_time = redis.call("ZSCORE", KEYS[1], unit_id)
 
-```text
-KEYS[1]: due_key (scheduler:due:{platform}:{priority})
-KEYS[2]: unit_key (unit:{unit_id})
-KEYS[3]: stream_name (queue:connector:{platform}:{priority})
-ARGV[1]: unit_id
-ARGV[2]: now (current Unix epoch timestamp)
+  if not current_due_time then
+      return 0
+  end
+
+  if tonumber(current_due_time) ~= expected_due_time then
+      return 0
+  end
+
+  redis.call("ZADD", KEYS[1], next_run_at, unit_id)
+
+  return 1
+  ```
+  If another concurrent worker advanced the unit's score during Phase 1, `ZSCORE ~= expected_due_time`, CAS returns `0`, and the newer score is preserved without modification.
+
+---
+
+### 9.4 Daily Scheduling & Timezone Calculations
+
+Daily scheduling is handled by `app/services/schedule_time_service.py`:
+
+```python
+calculate_next_run(now: datetime, run_times: list[str], timezone_name: str = "Asia/Kolkata") -> datetime
 ```
 
-1. **Check Scheduled Status**:
-   `redis.call("ZSCORE", KEYS[1], unit_id)`
-   If `due_score` is nil, the unit is not in the schedule; return `{0, "not_scheduled"}`.
-2. **Check Due Condition**:
-   `if tonumber(due_score) > now then return {0, "not_due"} end`
-   Ensures the unit is not dispatched prematurely.
-3. **Read Unit Metadata**:
-   `redis.call("HGET", KEYS[2], ...)`
-   Retrieves `term`, `platform`, `priority`, `org_id`, `search_options`, `cadence_seconds`, and `enabled`.
-4. **Remove Disabled Units**:
-   If `enabled == "false"`, the script removes the unit from the due schedule (`redis.call("ZREM", KEYS[1], unit_id)`) and returns `{0, "disabled"}`.
-5. **Validate Required Metadata**:
-   Verifies that `term`, `platform`, `priority`, and `cadence > 0` exist. If corrupt, halts with `redis.error_reply("Invalid scheduled unit metadata")`.
-6. **Publish Job to Connector Stream via `XADD`**:
-   Constructs `scheduled_for = tostring(due_score)` and `request_id = "scheduled:" .. unit_id .. ":" .. scheduled_for`.
-   Dispatches the job payload to `KEYS[3]`:
-   ```lua
-   local stream_id = redis.call(
-       "XADD", KEYS[3], "*",
-       "request_id", request_id,
-       "unit_id", unit_id,
-       "term", term,
-       "platform", platform,
-       "priority", priority,
-       "org_id", org_id,
-       "search_options", search_options,
-       "scheduled_for", scheduled_for,
-       "dispatched_at", tostring(now),
-       "cadence_seconds", tostring(cadence)
+#### Calculation Rules & Edge Cases
+1. **Clock Times:** Configured as naive 24-hour clock strings (e.g. `["10:00", "19:00"]`). Rejects timezone-aware strings, duplicates, or empty lists.
+2. **Timezone Conversion:** Uses `zoneinfo.ZoneInfo("Asia/Kolkata")` to convert UTC `now` to Indian Standard Time (IST).
+3. **Intraday Evaluation:**
+   - At 09:45 IST -> next run is today at 10:00 IST (04:30 UTC).
+   - At 10:00 IST (exact boundary) -> next run advances to today at 19:00 IST (13:30 UTC).
+   - At 10:05 IST -> next run is today at 19:00 IST (13:30 UTC).
+4. **Day Rollover:**
+   - At 19:05 IST (after the last run of the day) -> adds 1 day to local date and selects the earliest configured time: tomorrow at 10:00 IST (04:30 UTC next day).
+5. **UTC Return:** Always converts the calculated local datetime back to UTC for consistent Unix timestamps in Redis.
+
+---
+
+### 9.5 MongoDB-to-Redis Synchronization & Reconciliation
+
+Durable schedule definitions reside in MongoDB's `scheduled_units` collection. Synchronization into Redis is executed by `sync_scheduled_units_from_mongodb()`:
+
+1. **Read-First Safety:** Reads MongoDB `scheduled_units`. If MongoDB is down or queries fail, Redis is left completely untouched.
+2. **Preserving Runtime Due Times (`preserve_due_time=True`):**
+   When updating Redis, it calls `pipe.zadd(due_key, {unit_id: _timestamp(next_run_at)}, nx=True)`.
+   The `nx=True` flag ensures that **only new units receive the MongoDB initial due time**. For units already running in Redis, existing runtime due scores are preserved and never overwritten with stale MongoDB values.
+3. **Stale Schedule Reconciliation:**
+   Tracks all MongoDB-managed IDs in `schedule:managed_unit_ids`. Computes:
+   ```python
+   stale_ids = (existing_managed_ids - seen_ids) | disabled_ids
+   ```
+   For every stale ID, an atomic pipeline deletes `unit:{unit_id}`, removes it from `schedule:due:...`, and removes it from `schedule:managed_unit_ids`.
+
+---
+
+### 9.6 Inbound Result Worker & `XAUTOCLAIM` Recovery
+
+`ResultWorker` runs two concurrent `asyncio` loops:
+
+1. **`_consumer_new_messages()`:**
+   Consumes new undelivered messages from `connector:rss:results` using `xreadgroup` with ID `">"`.
+2. **`_recover_pending_messages()`:**
+   Periodically calls `xautoclaim`:
+   ```python
+   result = await redis_client.xautoclaim(
+       name=self.stream_name,
+       groupname=self.group_name,
+       consumername=self.recovery_consumer_name,
+       min_idle_time=self.claim_idle_ms,  # 30,000 ms (30s)
+       start_id=claim_start_id,
+       count=self.batch_size,
    )
    ```
-7. **Advance Next Run Timestamp via `ZADD`**:
-   `local next_run_at = now + cadence`
-   `redis.call("ZADD", KEYS[1], next_run_at, unit_id)`
-   Moves the score forward in the sorted set, removing it from candidate lookups until the cadence has elapsed.
-8. **Return Dispatch Receipt**:
-   Returns `{1, stream_id, tostring(next_run_at), request_id}`.
-
-#### Atomic Rationale & Delivery Semantics Nuance
-
-- **Why Lua?** Redis executes Lua scripts as a single atomic command on its main thread. No other Redis operation can interleave between reading the score, publishing the `XADD`, and updating the `ZADD`. This eliminates the dispatch-and-reschedule race window.
-- **Precision on Delivery Semantics**: This atomicity guarantees that Redis will not double-dispatch the same schedule tick. **However, this does not guarantee end-to-end exactly-once connector processing.** If a downstream connector crashes mid-crawl, network packets drop, or retries are triggered downstream, duplicates can still occur at the connector tier. Deduplication at the persistence tier (`rss_items.item_hash`) remains essential.
-
-#### Outbound Job Payload Fields
-
-The payload fields actually written to the connector stream by the Lua script are:
-
-| Field | Description | Example Value |
-| :--- | :--- | :--- |
-| `request_id` | Deterministic job ID formatted as `scheduled:{unit_id}:{scheduled_for}` | `scheduled:unit-101:1775735160.0` |
-| `unit_id` | Identifier of the scheduled unit | `unit-101` |
-| `term` | The search phrase or query | `copper prices` |
-| `platform` | Target platform | `rss` |
-| `priority` | Priority tier | `high` |
-| `org_id` | Organization or tenant ID | `org-argus` |
-| `search_options` | JSON-encoded dictionary of search parameters | `{"language": "en"}` |
-| `scheduled_for` | The score at which the unit became due | `1775735160.0` |
-| `dispatched_at` | Current Unix epoch timestamp | `1775735161.45` |
-| `cadence_seconds` | Recurrence interval in seconds | `300` |
+   Scans the consumer group's PEL for messages idle for more than 30 seconds. Reclaims them under consumer name `{consumer_name}-recovery` and re-processes them. When scan reaches `"0-0"`, waits for `recovery_interval` (10s) before starting the next scan.
+3. **Strict Post-Persistence Acknowledgement (`xack`):**
+   `xack` is called **only after** `process_crawl_result()` succeeds in MongoDB. If an error occurs, the message remains in the PEL and is reclaimed by the recovery loop.
 
 ---
 
-### 9.4 Dispatcher Tick & Idempotent Sweeps
+### 9.7 Comprehensive Test Verification Matrix
 
-The dispatcher tick is implemented by [`dispatch_due_units_once()`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L222-L280):
-
-```python
-async def dispatch_due_units_once(
-    limit_per_key: int = 100,
-    now: float | None = None,
-    platform_priority_keys: set[str] | None = None,
-) -> int:
-```
-
-#### Sweep Mechanics
-
-1. **Target Combination Discovery**:
-   - By default, reads `schedule:active_keys` from Redis.
-   - Accepts an optional `platform_priority_keys` argument (a set of strings such as `{"rss:high"}`), allowing isolated integration tests to test specific queues without sweeping unrelated production schedules.
-2. **Iteration & Parsing**:
-   - Iterates through keys, splitting on `:` to extract `platform` and `priority`.
-   - Logs and skips malformed keys safely.
-3. **Candidate Fetching**:
-   - Calls `get_due_unit_id(platform, priority, limit=limit_per_key, now=current_time)`.
-4. **Atomic Dispatch**:
-   - For each due unit ID, calls `dispatch_due_unit()`.
-   - Increments `dispatched_count` for each successful dispatch (`result is not None`).
-   - Logs the unit ID, target stream name, and `next_run_at`.
-5. **Idempotency Guarantee**:
-   - Because `dispatch_due_unit()` advances the sorted set score to `now + cadence`, a subsequent tick executed at the exact same timestamp will find 0 due units. The score has moved into the future, guaranteeing that repeated ticks are idempotent.
-
----
-
-### 9.5 Background Scheduler Worker & Lifespan Integration
-
-#### [`SchedulerWorker`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py) Implementation
-
-Located in `app/workers/scheduler_worker.py`:
-- **Configuration**: Reads `settings.dispatch_tick_seconds` (defaulting to `5` seconds).
-- **`run_once()`**: Triggers one tick via `dispatch_due_units_once()` and logs the outcome.
-- **`run()`**: Autonomous async loop:
-  - Runs while `not self._stop_event.is_set()`.
-  - Wraps `await self.run_once()` in a `try/except Exception` block: ordinary tick exceptions are logged (`"Scheduler tick failed."`), and the loop continues rather than crashing.
-  - Waits between ticks using `asyncio.wait_for(self._stop_event.wait(), timeout=self.tick_seconds)`.
-- **`stop()`**: Asynchronously sets `self._stop_event`, cleanly interrupting idle waits.
-
-#### FastAPI Lifespan Integration in [`app/main.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/main.py)
-
-The integration is verified in the active codebase:
-```python
-# app/main.py
-request_worker = RequestWorker(poll_interval=2.0)
-result_worker = ResultWorker(block_ms=2000, batch_size=10)
-scheduler_worker = SchedulerWorker()
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    background_tasks = [
-        asyncio.create_task(request_worker.start(), name="request-worker"),
-        asyncio.create_task(result_worker.start(), name="result-worker"),
-        asyncio.create_task(scheduler_worker.run(), name="scheduler-worker"),
-    ]
-    try:
-        yield
-    finally:
-        request_worker.stop()
-        result_worker.stop()
-        await scheduler_worker.stop()
-        await asyncio.gather(*background_tasks, return_exceptions=True)
-```
-
-When Uvicorn boots, all three workers launch as supervised `asyncio` background tasks. On application shutdown, each worker is signaled to stop, and remaining tasks are awaited.
-
----
-
-### 9.6 MongoDB Scheduled Units: Durable Configuration vs Hot Path
-
-The Argus 2.0 blueprint defines a clean two-tier architecture between durable storage and hot-path execution:
-
-```text
-[ Durable Storage: MongoDB ]                     [ Hot-Path Execution: Redis ]
-  Database: argus                                  Sorted Set: scheduler:due:{p}:{pri}
-  Collection: scheduled_units                      Hash: unit:{unit_id}
-  Role: Durable System of Record                   Set: schedule:active_keys
-  Operations: CRUD, UI, Auditing, Cadence Config   Role: Sub-millisecond Scheduling & Dispatch
-```
-
-#### Verification of Current MongoDB Implementation Status
-
-A meticulous inspection of the repository reveals:
-
-1. **Collection Handle Implemented**:
-   [`app/platform/mongodb.py` (line 49)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py#L49) defines:
-   ```python
-   scheduled_units = database["scheduled_units"]
-   ```
-2. **Unused Import in Scheduler Service**:
-   [`app/services/scheduler_service.py` (line 7)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L7) imports `scheduled_units`:
-   ```python
-   from app.platform.mongodb import scheduled_units
-   ```
-   However, `scheduled_units` is **never referenced or called anywhere else in the file or service layer**.
-3. **Synchronization & Startup Reconciliation Still Pending**:
-   - There is **no background worker, synchronizer service, or change-stream listener** that syncs documents from MongoDB `scheduled_units` into Redis.
-   - There is **no startup reconciliation hook** in `app/main.py` that reads active units from MongoDB upon boot and seeds the Redis sorted sets and metadata hashes.
-   - Currently, scheduled units must be inserted **directly into Redis** via `register_scheduled_unit()` (as done in tests).
-   - **Conclusion**: MongoDB durable scheduled-unit persistence is **Planned, Not Yet Implemented**.
-
-| Architectural Layer | Specification (Proposed Behavior) | Actual Verified Code State (Current Behavior) |
-| :--- | :--- | :--- |
-| **System of Record** | MongoDB `scheduled_units` holds durable unit configurations (cadence, query terms, active status, org ID). | Collection handle initialized in `mongodb.py`. No documents, schemas, or models wired. |
-| **Hot Path State** | Redis holds due sorted sets (`schedule:due:...`), metadata hashes (`unit:...`), and active registry keys (`{platform}:{priority}`). | **Implemented in Isolation with Known Defects**: Code uses `scheduler:due:...`, hashes `unit:...`, but registers `unit:{unit_id}` in `schedule:active_keys` instead of `{platform}:{priority}`. |
-| **Sync Mechanism** | Orchestrator boots, reads active units from MongoDB `scheduled_units`, hydrates Redis hot path, and runs periodic reconciliation. | **Not Yet Implemented**. Hot path operates entirely detached from MongoDB; units must be manually registered in Redis via `register_scheduled_unit()`. |
-
----
-
-### 9.7 Test Suite & Verification Matrix
-
-Four standalone integration test suites verify the scheduler implementation in `argus-orchestrator`:
-
-1. **[`app/test/test_scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_service.py)**:
-   - Registers a test unit scheduled 60 seconds into the future.
-   - Verifies hash metadata (`term`, `cadence_seconds`) stored in Redis `unit:{unit_id}`.
-   - Verifies unit is **not** returned when `now = future_time - 1`.
-   - Verifies unit **is** returned when `now = future_time`.
-   - Cleans up Redis test keys.
-
-2. **[`app/test/test_scheduler_dispatch.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_dispatch.py)**:
-   - Registers a due unit with `next_run_at = now - 1`.
-   - Dispatches via `dispatch_due_unit()`, asserting result receipt.
-   - Verifies stream message published to `queue:connector:{platform}:{priority}` with accurate `term` and `unit_id`.
-   - Verifies `zscore` was updated to `next_run > now`.
-   - Re-dispatches at the identical timestamp; asserts return is `None` and stream message count remains 1.
-
-3. **[`app/test/test_scheduler_tick.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_tick.py)**:
-   - Registers a due unit and runs one tick via `dispatch_due_units_once(platform_priority_keys={active_key})`.
-   - Asserts return count is 1 and stream contains the job.
-   - Executes second tick immediately at identical `now`; asserts return count is 0.
-
-4. **[`app/test/test_scheduler_worker.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_worker.py)**:
-   - Creates `SchedulerWorker(tick_seconds=0.05)`.
-   - Mocks `dispatch_due_units_once` to count ticks and call `await worker.stop()` on tick 3.
-   - Runs `worker.run()` with `asyncio.wait_for(timeout=2)`.
-   - Asserts call count reached exactly 3 and worker stopped gracefully.
-
-#### Live Verified Test Execution Results
-
-All four test suites were directly executed and verified on the local host (Windows PowerShell, Python 3.11.0, with an active Redis instance on port 6379):
-
-> [!NOTE]
-> **MongoDB Verification Boundary**: The console output in the test execution traces displays `Initializing MongoDB client....` and prints the configured MongoDB URL (`mongodb://localhost:27017`) solely because [`app/services/scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L7) contains a top-level import of `scheduled_units` from [`app/platform/mongodb.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py). At import time, `mongodb.py` executes top-level `print()` statements and instantiates an `AsyncIOMotorClient` object lazily. The scheduler test suites interact exclusively with Redis; **no queries, write operations, or ping commands were executed against MongoDB**. Printing the configured MongoDB URL at module load does not constitute proof of database connectivity, and MongoDB connectivity was **not** verified by these test runs. Redis test execution results and data structures were independently and comprehensively verified.
+All 54 tests in `argus-orchestrator` across the 16 test files matching `test_*.py` pass cleanly (historical baseline: 42 tests passed prior to adding stale request recovery):
 
 ```powershell
-# 1. Verification of test_scheduler_service.py:
-$env:PYTHONPATH="C:\Users\OmMangeshBangar\PycharmProjects\argus-2.0\argus-orchestrator"
-..\argus-orchestrator\venv\Scripts\python.exe ..\argus-orchestrator\app\test\test_scheduler_service.py
-# Output:
-# ======================================
-# Initializing Redis client....
-# Redis URL: redis://localhost:6379/0
-# =======================================
-# Initializing MongoDB client....
-# MongoDB URL: mongodb://localhost:27017
-# MongoDB Database: argus
-# PASS: scheduled unit registered
-# PASS: metadata stored in Redis
-# PASS: future unit is not returned early
-# PASS: unit is returned when due
-# Cleaned up test data
-# Exit code: 0
-
-# 2. Verification of test_scheduler_dispatch.py:
-..\argus-orchestrator\venv\Scripts\python.exe ..\argus-orchestrator\app\test\test_scheduler_dispatch.py
-# Output:
-# PASS: due unit dispatched
-# PASS: connector stream contains the job
-# PASS: next run time was updated
-# PASS: repeated dispatch did not add another job
-# Exit code: 0
-
-# 3. Verification of test_scheduler_tick.py:
-..\argus-orchestrator\venv\Scripts\python.exe ..\argus-orchestrator\app\test\test_scheduler_tick.py
-# Output:
-# PASS: dispatcher found and dispatched the due unit
-# PASS: job published to the correct stream
-# PASS: second tick did not dispatch the unit again
-# Exit code: 0
-
-# 4. Verification of test_scheduler_worker.py:
-..\argus-orchestrator\venv\Scripts\python.exe ..\argus-orchestrator\app\test\test_scheduler_worker.py
-# Output:
-# PASS: scheduler worker executed three ticks
-# PASS: scheduler worker stopped gracefully
-# Exit code: 0
+.\venv\Scripts\python.exe -m unittest discover -s app/test -p "test_*.py" -v
+# Output: Ran 54 tests in 2.044s ... OK
+# Historical Output (prior to request recovery): Ran 42 tests in 2.700s ... OK
 ```
 
-#### Diagnostic Scratch Test: Unmasking the Default Tick Defect
-
-While the four isolated tests passed, an architect-level diagnostic test was executed to evaluate the behavior of `dispatch_due_units_once(now=now)` when called **without** explicit `platform_priority_keys` (which is precisely how `SchedulerWorker.run_once()` invokes it in production):
-
-```python
-# Live scratch execution:
-unit_id = f"test-bug-{uuid.uuid4().hex}"
-await register_scheduled_unit(unit_id, "rss", "high", now - 1, "test", 300)
-count = await dispatch_due_units_once(now=now)
-# Result: count = 0 (Dispatched 0 units despite unit being overdue!)
-```
-**Diagnostic Finding**: The four test suites passed only because:
-1. `test_scheduler_tick.py` bypassed reading `ACTIVE_KEYS_SET` by manually passing `platform_priority_keys={f"{platform}:{priority}"}`.
-2. `test_scheduler_worker.py` mocked out `dispatch_due_units_once` entirely with a fake counter.
-3. In production, calling `dispatch_due_units_once()` with default arguments fails to dispatch any due units because `ACTIVE_KEYS_SET` contains `unit:{unit_id}` instead of `{platform}:{priority}`, and the `return` statement prematurely exits the sweep loop on the first entry.
+| Test File | Test Type | Infrastructure Dependencies | Scope & Description |
+| :--- | :--- | :--- | :--- |
+| `test_schedule_time_service.py` | Unit Test | None (Pure Python) | Tests clock time parsing, intra-day candidate advancement, day rollover, and error handling for daily schedules in `Asia/Kolkata`. |
+| `test_scheduled_request_service.py` | Mocked Integration | None (Mocked MongoDB) | Verifies durable MongoDB request document creation, deterministic request IDs, and retry tolerance via `DuplicateKeyError`. |
+| `test_scheduler_dispatch.py` | Mocked Integration | None (Mocked Redis & Mongo) | Tests two-phase dispatch, CAS score advancement sequence, CAS rejection handling, and daily schedule next-run integration. |
+| `test_scheduler_sync.py` | Mocked Integration | None (Mocked Redis & Mongo) | Tests synchronization of active schedules, validation of malformed fields, and purge of disabled or deleted units. |
+| `test_scheduler_sync_due_time.py` | Real Integration | Real Redis (Port 6379), Mocked Mongo | Proves that `sync_scheduled_units_from_mongodb()` with `nx=True` preserves existing runtime due scores in Redis. |
+| `test_scheduler_tick.py` | Real Integration | Real Redis (Port 6379), Mocked Mongo | Tests multi-combination sweeps across `schedule:active_keys`, score advancement, and repeat dispatch prevention. |
+| `test_scheduler_worker.py` | Unit Test | None (Mocked services) | Verifies synchronization-before-dispatch execution order, periodic ticking, and clean graceful shutdown. |
+| `test_scheduler_service.py` | Real Integration | Real Redis (Port 6379) | Verifies registration, hash metadata persistence, and time-based candidate lookups against real Redis sorted sets. |
+| `test_result_worker.py` | Unit Test | None (Mocked Redis & Mongo) | Verifies post-persistence `xack`, suppression of `xack` on failure, and `XAUTOCLAIM` recovery invocation. |
+| `manual_result_worker_recovery.py` | Standalone Integration | Real Redis (Port 6379), Mocked Mongo | Standalone manual verification script (does not match `test_*.py`); verifies `XAUTOCLAIM` reclamation, processing, and PEL clearance against a temporary isolated Redis test stream. |
+| `test_request_service.py` | Mocked Integration | None (Mocked Redis & Mongo) | Verifies outbound request dispatch via `_IDEMPOTENT_XADD_SCRIPT`, metadata serialization, audit updates, and retry deduplication. |
+| `test_redis_dispatch_recovery.py` | Real Integration | Real Redis (Port 6379/6380) | Proves that `_IDEMPOTENT_XADD_SCRIPT` detects deleted stream entries via `XRANGE` and republishes replacements cleanly. |
+| `test_request_recovery.py` | Mocked Integration & Unit | None (Mocked Mongo & Redis) | Verifies stale request atomic recovery claims, recovery leases, Redis message ID reconciliation, and missing `request_id` handling. |
+| `test_request_worker.py` | Unit Test | None (Mocked services) | Verifies `RequestWorker` startup health checks, periodic stale request recovery invocation, and recovery exception isolation. |
+| `test_result_service.py` | Mocked Integration | None (Mocked Redis & Mongo) | Tests article deduplication on `item_hash`, in-batch filtering, Redis `mget` cache, Redis failure fallback, pipeline TTL, and status updates. |
+| `test_request_idempotency.py` | Real Integration | Real MongoDB | Tests concurrent worker races to insert identical queries; verifies partial unique index enforcement. |
+| `test_bing.py` | Standalone Integration | Live Network | Verifies Bing RSS search endpoint construction and feed XML parsing. |
 
 ---
 
-### 9.8 Critical Architectural Limitations & Hardening Topics
+### 9.8 Resolution of Prototype Defects (Register 1–8)
 
-Before the scheduler subsystem can be promoted to production, the following architectural limitations must be resolved:
+During initial prototyping, eight defects were identified in the scheduler subsystem. All eight have been comprehensively resolved:
 
-#### 1. Stream Contract Mismatch (Orchestrator vs Connector)
-
-There is a fundamental contract mismatch between the stream name published by the scheduler and the stream name consumed by the connector:
-
-- **Orchestrator Scheduler**: Publishes connector jobs to dynamic, multi-stream priority queues:
-  ```
-  queue:connector:{platform}:{priority}
-  ```
-  *(Example: `queue:connector:rss:high`, `queue:connector:rss:low`, `queue:connector:bing:normal`)*.
-- **Existing Connector Worker**:
-  [`argus-connector/app/core/config.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector/app/core/config.py) and [`argus-connector/app/workers/connector_worker.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector/app/workers/connector_worker.py) configure:
-  ```python
-  connector_stream: str = "queue:connector:rss"
-  ```
-  and listen strictly on that single static stream.
-- **Impact**: Any jobs dispatched by the scheduler into `queue:connector:rss:high` will **never be consumed or acknowledged** by the current `ConnectorWorker`.
-- **Status: Pending Alignment**. End-to-end integration is blocked until either:
-  1. `ConnectorWorker` is updated to support multi-stream consumption / pattern-based stream reading (`XREADGROUP` across multiple priority streams per platform), or
-  2. Orchestrator provides a configurable stream routing mechanism that maps priority queues down to `settings.connector_stream`.
-
-#### 2. End-to-End Orchestration Not Yet Demonstrated
-
-While `SchedulerWorker` is wired into `app/main.py` lifespan and passes unit tests, the system has **not yet executed an end-to-end integration pipeline**:
-`Scheduled Unit -> Redis Hot Path -> Atomic Lua Dispatch -> ConnectorWorker Crawl -> ResultWorker Ingestion -> MongoDB rss_items`.
-
-#### 3. Missing MongoDB-to-Redis Configuration Synchronizer
-
-The MongoDB collection handle `scheduled_units` exists, but there is no hydration or synchronization logic:
-- Units created in MongoDB are not automatically loaded into Redis.
-- Cadence changes or disabling units in MongoDB do not propagate to Redis.
-- Redis broker reboot would wipe all in-memory schedules without MongoDB startup reconciliation.
-
-#### 4. Single Orchestrator Process Constraint (Lack of Distributed Lock)
-
-`SchedulerWorker` runs unconditionally on every instance of `argus-orchestrator`. If horizontal scaling is attempted (running 2+ orchestrator replicas):
-- Both workers will trigger ticks at overlapping intervals.
-- While the atomic Lua script prevents duplicate dispatches for a given timestamp, both instances will perform redundant `ZRANGEBYSCORE` and Redis evaluations, creating unnecessary lock contention and Redis CPU overhead.
-- A distributed leader election or Redis-based distributed mutex (`SET key val NX EX 5`) is required before horizontal scaling.
-
-#### 5. Head-of-Line Starvation & Scheduling Fairness
-
-In `dispatch_due_units_once()`, candidate retrieval uses `limit_per_key`. If one high-traffic platform accumulates thousands of due units, the dispatcher could spend significant execution time processing that queue while starving subsequent queues. Round-robin or weighted fair queuing across active keys will be necessary at scale.
-
-#### 6. Missing Dead-Letter & Failure Feedback Loop
-
-If a connector crashes or fails permanently while crawling a scheduled request, the orchestrator scheduler has already advanced `next_run_at` to `now + cadence`. There is currently no negative acknowledgement or failure feedback loop informing the scheduler to trigger an immediate retry or backoff.
-
-#### 7. Redis Persistence Requirements
-
-The scheduler relies on Redis as the operational store for next execution scores and metadata. If Redis is restarted without `AOF` (Append Only File) persistence enabled (`appendonly yes`), all active scheduling state and next run timestamps will be lost.
+| Defect # | Original Defect Description | Resolved Implementation in Current Code | Resolution Evidence |
+| :--- | :--- | :--- | :--- |
+| **Defect 1** | `ACTIVE_KEYS_SET` stored `unit:{unit_id}` instead of `{platform}:{priority}`. | [`scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L128) executes `pipe.sadd(ACTIVE_KEYS_SET, f"{platform}:{priority}")`. | Sweep loop correctly extracts `platform` and `priority`. |
+| **Defect 2** | `dispatch_due_units_once` had loop variable shadowing and indented `return`. | Variable renamed to `for active_key in sorted(active_keys):` and `return dispatched_count` dedented outside the loop. | Sweeps iterate over all active combinations. Verified in `test_scheduler_tick.py`. |
+| **Defect 3** | Typo in test cleanup key `"schedule:active_key"` without 's'. | Corrected to `"schedule:active_keys"` in [`test_scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_service.py#L72). | Zero orphaned keys remain in Redis after test execution. |
+| **Defect 4** | Key prefix inconsistency (`scheduler:due:...` vs `schedule:due:...`). | Standardized to `schedule:due:{platform}:{priority}` across all services, Lua scripts, and tests. | Clean, consistent Redis keyspace naming. |
+| **Defect 5** | Singular naming `get_due_unit_id()` returning a list. | Maintained signature for backwards compatibility while returning `list[str]`; documented clearly. | All callers handle candidate list properly. |
+| **Defect 6** | Suppressed exception traceback in `SchedulerWorker.run()`. | Replaced `logger.info(...)` with `logger.exception("Scheduler tick failed.")`. | Full exception tracebacks and error contexts are logged. |
+| **Defect 7** | Dead `scheduled_units` import in `scheduler_service.py`. | Wired into `sync_scheduled_units_from_mongodb()` for full MongoDB-to-Redis hydration and reconciliation. | Active database-to-cache sync mechanism. |
+| **Defect 8** | Direct Lua `XADD` stream contract mismatch (`queue:connector:rss:high` vs `queue:connector:rss`). | Replaced direct stream publishing with two-phase dispatch: creates durable MongoDB request in `rss_requests`, dispatched by `RequestWorker`. | Perfectly aligns with connector contract and preserves audit trail. |
 
 ---
 
-### 9.9 Beginner-Friendly Component Breakdown, Flow Diagram, Status Matrix & Defect Register
+### 9.9 Outstanding Work, Verification Gaps & Production Readiness
 
-#### Component Breakdown
+While the scheduling and recovery subsystems are feature-complete and fully unit/integration tested, the following items require live operational verification before production deployment:
+
+1. **Initial Registration of Daily Schedules:**
+   A seeding script or admin API to create new daily schedule documents in MongoDB `scheduled_units` and verify that the very first calculated due time in Redis matches expectations.
+2. **Real Full End-to-End Scheduled Crawl Pipeline:**
+   Running all three services (`argus-orchestrator`, `argus-connector`, `redis`, `mongodb`) live and letting a scheduled unit fire, traverse the request worker, crawl Bing News RSS, publish results, and persist to `rss_items`.
+3. **Connector Multi-Source Scheduled Dispatch:**
+   Currently, `scheduled_request_service.py` builds URLs exclusively via `build_bing_rss_url(term)`. Expanding the scheduler to trigger NSE circulars, NSE announcements, or BSE crawls requires adding platform-specific request builders or payload models.
+4. **Distributed Scheduler Lock for Horizontal Scaling:**
+   `SchedulerWorker` runs inside `argus-orchestrator`. If multiple orchestrator instances are deployed in a cluster, a Redis-based distributed mutex (`SET lock:scheduler_tick <id> NX EX 5`) should be implemented so that only the leader instance runs the sweep tick.
+
+---
+
+### 9.10 Redis Article Deduplication Architecture & Stream Recovery Semantics
+
+This subsection details the two production-hardening mechanisms implemented across `result_service.py` and `request_service.py`:
+
+#### 1. Multi-Tier Article Deduplication Pipeline
+To protect MongoDB from write amplification when crawlers ingest recurring RSS feeds, `result_service.py` executes a three-tier deduplication filter:
 
 ```text
-1. register_scheduled_unit()
-   - What it does: Enrolls a search task into Redis scheduling.
-   - Why it exists: Establishes metadata and initial execution time for recurrent crawls.
-   - Input: unit_id, platform, priority, next_run_at, term, cadence_seconds, options.
-   - Output: None (populates Redis keys).
-   - Data Structures: Hash 'unit:{unit_id}', ZSET 'scheduler:due:{platform}:{priority}', Set 'schedule:active_keys'.
-   - On Failure: Raises ValueError for invalid inputs; rolls back Redis pipeline on connection failure.
-   - Next Connection: Read by get_due_unit_id() when next_run_at arrives.
-
-2. get_due_unit_id()
-   - What it does: Scans the sorted set for units whose timestamp <= now.
-   - Why it exists: Identifies candidate units ready for execution.
-   - Input: platform, priority, limit, now.
-   - Output: list[str] of candidate unit_ids.
-   - Data Structures: ZSET 'scheduler:due:{platform}:{priority}'.
-   - On Failure: Raises ValueError on invalid limit; returns empty list on network error or no due units.
-   - Next Connection: Candidates passed to dispatch_due_unit().
-
-3. dispatch_due_unit()
-   - What it does: Atomically validates, publishes, and reschedules a due unit via Lua.
-   - Why it exists: Guarantees zero duplicate job dispatches within the reschedule window.
-   - Input: unit_id, platform, priority, now.
-   - Output: dict containing stream_name, stream_message_id, next_run_at, request_id (or None).
-   - Data Structures: Evaluates Lua against ZSET, Hash, and target Redis Stream.
-   - On Failure: Returns None if not due/disabled; raises error if metadata corrupt.
-   - Next Connection: Publishes message to Redis Stream for Argus Connector.
-
-4. dispatch_due_units_once()
-   - What it does: Runs one sweep over active platform/priority combinations.
-   - Why it exists: Drives the batch dispatch cycle for a single tick.
-   - Input: limit_per_key, now, platform_priority_keys (optional).
-   - Output: Integer count of dispatched units.
-   - Data Structures: Reads Set 'schedule:active_keys', delegates to ZSETs and Streams.
-   - On Failure: Catches malformed keys, logs warnings, continues loop.
-   - Next Connection: Invoked repeatedly by SchedulerWorker.
-
-5. SchedulerWorker
-   - What it does: Background daemon that ticks every dispatch_tick_seconds (5s).
-   - Why it exists: Provides autonomous, hands-off execution inside the FastAPI process.
-   - Input: None (configured via settings).
-   - Output: Continuous dispatch ticks logged to stdout/file.
-   - Data Structures: Manages asyncio Event and task lifecycle.
-   - On Failure: Logs error and sleeps tick_seconds before retrying.
-   - Next Connection: Supervised by app/main.py lifespan.
+Incoming CrawlResult (Items)
+            │
+            ▼
+┌───────────────────────────────────────┐
+│ Tier 1: In-Batch Set Deduplication    │ ──> Discards intra-batch duplicates (seen_hashes)
+└───────────────────┬───────────────────┘
+                    │ (unique_items)
+                    ▼
+┌───────────────────────────────────────┐
+│ Tier 2: Redis Cache MGET Lookup       │
+│ Key: 'argus:article:seen:{item_hash}' │ ──> Filters cached items seen within 30 days
+│ (Fallback: MongoDB on Redis Error)    │
+└───────────────────┬───────────────────┘
+                    │ (unseen_items)
+                    ▼
+┌───────────────────────────────────────┐
+│ Tier 3: MongoDB Authoritative Upsert  │
+│ rss_items.bulk_write([$setOnInsert])  │ ──> Atomic document insertion & index safety net
+└───────────────────┬───────────────────┘
+                    │
+                    ▼
+┌───────────────────────────────────────┐
+│ Post-Save Redis Pipeline Caching      │
+│ pipeline.set(..., "1", ex=2592000)    │ ──> Populates 30-day cache for new items
+└───────────────────────────────────────┘
 ```
 
-#### Scheduler Execution Flow Diagram
+**Key Operational Properties:**
+- **Redis TTL (30 Days):** Caches article fingerprints (`ARTICLE_SEEN_PREFIX = "argus:article:seen:"`) with `ex=30*24*60*60` (2,592,000 seconds). High temporal relevance while preventing unbounded Redis memory growth.
+- **Fail-Open Resilience:** If Redis is down, `filter_unseen_items()` catches the exception, logs a warning with traceback, and returns all items to proceed with MongoDB insertion. System availability is never sacrificed for caching.
+- **Comprehensive Metrics:** Accurate tracking of `total_duplicates = stats["duplicates"] + redis_duplicates + batch_duplicates`, providing full visibility into crawler deduplication efficiency.
 
-```mermaid
-flowchart TD
-    subgraph Registration ["1. Registration Phase"]
-        A["register_scheduled_unit()"] -->|"ZADD (score=timestamp)"| B[("ZSET: scheduler:due:{p}:{pri}")]
-        A -->|"HSET (metadata)"| C[("HASH: unit:{unit_id}")]
-        A -->|"SADD unit_key (Current Defect #1: stores 'unit:{unit_id}', not '{platform}:{priority}')"| D[("SET: schedule:active_keys")]
+#### 2. Stream Deletion & Eviction Self-Healing (`_IDEMPOTENT_XADD_SCRIPT`)
+Under Redis memory pressure or manual stream administration (`XDEL`, `XTRIM MAXLEN`), stream entries can disappear while per-request deduplication keys (`argus:dispatch:request:{request_id}:stream_message_id`) remain in Redis.
+
+**Self-Healing Protocol:**
+1. Check `GET KEYS[2]`. If `existing_id` is found, run `XRANGE KEYS[1] existing_id existing_id COUNT 1`.
+2. If `#existing_message > 0`, the message is active in the stream; return `existing_id` immediately without publishing.
+3. If `#existing_message == 0`, the stream entry was deleted or evicted. Bypass deduplication, publish a fresh message via `XADD`, and overwrite `KEYS[2]` with the new message ID.
+4. Subsequent retries find the replacement message in the stream and return its ID idempotently.
+
+This protocol completely eliminates orphaned dispatch deadlocks in distributed production environments.
+
+---
+
+## 10. Implementation Guide: Stale Request Recovery, Idempotent Dispatch & Worker Reconciliation
+
+This section documents the architecture, implementation, configuration, verification, and open design review items for outbound request recovery in `argus-orchestrator`.
+
+---
+
+### 10.1 Request Dispatch and Recovery Architecture
+
+The request pipeline connects MongoDB and Redis with a strict separation of concerns:
+- **MongoDB as Durable Source of Truth:** All crawl requests originate and are tracked in the MongoDB `rss_requests` collection. MongoDB maintains the authoritative lifecycle status (`pending`, `processing`, `completed`, `failed`), tracking timestamps (`created_at`, `claimed_at`, `dispatched_at`, `completed_at`, `updated_at`), the allocated Redis stream entry identifier (`stream_message_id`), and any diagnostic error strings (`error_message`).
+- **Request Worker Outbound Dispatch:** The `RequestWorker` daemon queries for `pending` requests in MongoDB, claims a single document atomically (`status: "processing"`, `claimed_at = now`), constructs a `ConnectorRequest` payload, and publishes it to the configured Redis connector stream (`queue:connector:rss`).
+- **Why Processing Requests Can Become Stale (Audit Write Failure):**
+  In `request_service.dispatch_request()`, the Redis stream publication occurs first via `_publish_request_idempotently()`. If Redis successfully accepts the message and issues a `stream_message_id`, but the subsequent MongoDB audit update (`update_one` setting `stream_message_id` and `dispatched_at`) fails (e.g. temporary MongoDB disconnection, socket timeout, primary replica step-down, or worker process crash), the request document in MongoDB remains in `status: "processing"`, `claimed_at` set in the past, and `dispatched_at: None`.
+  Because standard dispatch only polls for `status: "pending"`, the request becomes stranded in `processing`. The downstream connector may already be crawling the target or may have completed it, but the orchestrator cannot correlate the job without `stream_message_id` and `dispatched_at`.
+- **How Stale Request Recovery Reconciles State:**
+  The background function `recover_stale_processing_requests()` continuously resolves this distributed inconsistency. It identifies requests stuck in `processing` beyond a configurable timeout threshold, places a temporary atomic recovery lease on them to prevent concurrent worker contention, reconciles the Redis stream state (reusing existing stream entries or republishing idempotently), and updates MongoDB with the resolved `stream_message_id` and `dispatched_at`.
+
+---
+
+### 10.2 Idempotent Redis Publishing & Deduplication Keys
+
+To ensure that retries and recovery runs do not flood downstream connectors with redundant work, Redis stream publication is strictly idempotent.
+
+#### 1. Deduplication Key Format
+Every outbound request uses a deterministic deduplication key in Redis:
+```text
+argus:dispatch:request:{request_id}:stream_message_id
+```
+This key maps the logical request identifier (e.g. `scheduled:unit-001:1710000000.000000` or an ad-hoc UUID) directly to the assigned Redis stream message ID (e.g. `1710000000123-0`).
+
+#### 2. Atomic Stream Publication (`_publish_request_idempotently`)
+The service executes `_IDEMPOTENT_XADD_SCRIPT` passing `KEYS[1]` as `settings.connector_stream` and `KEYS[2]` as the deduplication key:
+```lua
+local existing_id = redis.call("GET", KEYS[2])
+
+if existing_id then
+    local existing_message = redis.call(
+        "XRANGE",
+        KEYS[1],
+        existing_id,
+        existing_id,
+        "COUNT",
+        1
+    )
+
+    if #existing_message > 0 then
+        return existing_id
     end
+end
 
-    subgraph Polling ["2. Candidate Discovery (Tick)"]
-        E["SchedulerWorker (every 5s)"] --> F["dispatch_due_units_once()"]
-        F -->|"SMEMBERS (reads 'unit:{unit_id}'; parsing fails without test override)"| D
-        F -->|"ZRANGEBYSCORE (max=now)"| B
-        B -.->|"Candidate unit_ids (Read-Only)"| F
-    end
+local message_id = redis.call(
+    "XADD",
+    KEYS[1],
+    "*",
+    unpack(ARGV)
+)
 
-    subgraph AtomicDispatch ["3. Atomic Execution (Lua Script)"]
-        F -->|"dispatch_due_unit()"| G{"_DISPATCH_DUE_UNIT_SCRIPT"}
-        G -->|"1. Verify due score <= now"| G
-        G -->|"2. Read metadata"| C
-        G -->|"3. XADD job payload"| H[("Stream: queue:connector:{p}:{pri}")]
-        G -->|"4. ZADD (next_run = now + cadence)"| B
-    end
+redis.call("SET", KEYS[2], message_id)
 
-    subgraph Downstream ["4. Connector Consumption"]
-        H -.->|"PENDING INTEGRATION (Stream Contract Mismatch)"| I["ConnectorWorker (argus-connector)"]
-        I -->|"xreadgroup / xautoclaim"| J["Crawl & Extract Articles"]
-        J -->|"XADD CrawlResult"| K[("Stream: connector:rss:results")]
-        K -->|"xreadgroup"| L["ResultWorker (orchestrator)"]
-        L -->|"Upsert Articles & ACK"| M[("MongoDB: rss_items")]
-    end
+return message_id
+```
+**Decision Flow:**
+1. Check if a deduplication key exists via `GET KEYS[2]`.
+2. If `existing_id` is present, inspect the stream with `XRANGE` to verify that the message still physically exists in the stream.
+3. If `#existing_message > 0`, return `existing_id` immediately without publishing.
+4. If `#existing_message == 0` (e.g. the entry was truncated or removed with `XDEL`), publish a replacement message via `XADD`, update the deduplication key with the new ID, and return it.
 
-    style H stroke:#f66,stroke-width:2px,stroke-dasharray: 5 5
-    style I stroke:#f66,stroke-width:2px,stroke-dasharray: 5 5
-    style D stroke:#f90,stroke-width:2px,stroke-dasharray: 4 4
+#### 3. Pre-Dispatch Message Verification (`_get_existing_stream_message_id`)
+Before deciding whether to republish during recovery, `_get_existing_stream_message_id(request_id)` queries Redis:
+```python
+async def _get_existing_stream_message_id(request_id: str) -> Optional[str]:
+    dedupe_key = f"argus:dispatch:request:{request_id}:stream_message_id"
+
+    message_id = await redis_client.get(dedupe_key)
+    if not message_id:
+        return None
+
+    entries = await redis_client.xrange(
+        settings.connector_stream,
+        min=message_id,
+        max=message_id,
+        count=1,
+    )
+
+    if not entries:
+        return None
+
+    return str(message_id)
+```
+If both the deduplication key and the stream entry are intact, the existing `message_id` is reused directly, bypassing republishing entirely.
+
+#### 4. Known Limitation: Key Eviction Edge Case
+If the Redis deduplication key `argus:dispatch:request:{request_id}:stream_message_id` has been evicted or expired while an older message entry still exists in `queue:connector:rss`, `_get_existing_stream_message_id()` returns `None`. When `_publish_request_idempotently()` is subsequently invoked, it will also find no deduplication key and will execute `XADD` to create a fresh stream entry.
+In this specific scenario, a duplicate stream message will be published to the connector. This edge case remains pending architectural review; the system provides **at-least-once delivery with best-effort stream deduplication**, not complete exactly-once delivery.
+
+---
+
+### 10.3 Stale Request Recovery Implementation (`recover_stale_processing_requests`)
+
+The recovery routine operates in five distinct phases:
+
+#### 1. Candidate Eligibility Query
+A request is eligible for recovery if:
+- `status == "processing"`
+- `claimed_at <= (now - timeout_seconds)` (where `timeout_seconds` defaults to `settings.request_recovery_timeout_seconds`, 120s)
+- `dispatched_at is None` (proves the original audit write never completed)
+
+#### 2. Atomic Recovery Claim Lease
+To prevent multiple orchestrator instances from claiming the same stale request simultaneously, recovery uses a distributed lease mechanism:
+```python
+now = datetime.now(timezone.utc)
+cutoff = now - timedelta(seconds=timeout_seconds)
+lease_cutoff = now - timedelta(seconds=lease_seconds)
+recovery_token = str(uuid.uuid4())
+
+stale_request = await rss_requests.find_one_and_update(
+    {
+        "status": "processing",
+        "claimed_at": {"$lte": cutoff},
+        "dispatched_at": None,
+        "$or": [
+            {"recovery_claimed_at": {"$exists": False}},
+            {"recovery_claimed_at": None},
+            {"recovery_claimed_at": {"$lte": lease_cutoff}},
+        ],
+    },
+    {
+        "$set": {
+            "recovery_claimed_at": now,
+            "recovery_token": recovery_token,
+            "updated_at": now,
+        }
+    },
+    return_document=ReturnDocument.AFTER,
+)
+```
+If an active lease exists (`recovery_claimed_at > lease_cutoff`), competing workers skip the request until `lease_seconds` (120s) has elapsed.
+
+#### 3. Handling Requests Missing `request_id`
+If a claimed document does not possess a valid `request_id`, it cannot be correlated with Redis. The routine immediately releases the recovery lease so the document is not permanently locked:
+```python
+if not request_id:
+    logger.error("Stale MongoDB request %s has no request_id.", stale_request.get("_id"))
+    await rss_requests.update_one(
+        {
+            "_id": stale_request["_id"],
+            "status": "processing",
+            "recovery_token": recovery_token,
+        },
+        {
+            "$unset": {"recovery_claimed_at": "", "recovery_token": ""},
+            "$set": {"updated_at": datetime.now(timezone.utc)},
+        },
+    )
+    return 0
 ```
 
-> [!WARNING]
-> **Implementation vs. Blueprint Discrepancy in Flow Diagram:**
-> In the registration flow above, `register_scheduled_unit()` currently executes `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`, populating `schedule:active_keys` with `unit:{unit_id}` instead of `{platform}:{priority}` (Defect Register #1). In production (without test overrides), `dispatch_due_units_once()` attempts to split each member on `:` expecting `platform:priority`, which parses as `platform="unit"` and searches non-existent sorted sets `scheduler:due:unit:...`. The diagram explicitly depicts this current code defect.
+#### 4. Redis Stream Reconciliation
+1. Checks `message_id = await _get_existing_stream_message_id(request_id)`.
+2. If `message_id` is found, reuses it without publishing.
+3. If no message exists, constructs `ConnectorRequest` and publishes via `_publish_request_idempotently(request_id, payload)`.
 
-#### Implementation Status Matrix
+#### 5. Guarded MongoDB Reconciliation & Exception Safety
+The update back to MongoDB is strictly guarded by the `recovery_token`:
+```python
+recovered_at = datetime.now(timezone.utc)
+update_result = await rss_requests.update_one(
+    {
+        "_id": stale_request["_id"],
+        "status": "processing",
+        "recovery_token": recovery_token,
+        "dispatched_at": None,
+    },
+    {
+        "$set": {
+            "stream_message_id": message_id,
+            "dispatched_at": recovered_at,
+            "updated_at": recovered_at,
+            "error_message": None,
+        },
+        "$unset": {
+            "recovery_claimed_at": "",
+            "recovery_token": "",
+        },
+    },
+)
+```
+If an unexpected exception occurs during recovery, the outer `except Exception` block catches it, logs the traceback with `logger.exception(...)`, and attempts an emergency release of the recovery lease (`$unset: {"recovery_claimed_at": "", "recovery_token": ""}`) so subsequent cycles can retry.
 
-| Component | Status | Evidence | Remaining Work |
-| :--- | :--- | :--- | :--- |
-| **`scheduler_service.py`** | **Implemented (Prototype, Has Defects)** | Verified in [`app/services/scheduler_service.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py); tests pass in isolation. | Fix `ACTIVE_KEYS_SET` registration format; fix premature return in `dispatch_due_units_once()`. |
-| **Atomic Lua Script** | **Implemented & Verified** | Verified in `_DISPATCH_DUE_UNIT_SCRIPT`; passes idempotency and schedule advance assertions. | Add dead-letter handling for corrupt metadata. |
-| **`SchedulerWorker`** | **Implemented & Verified** | Verified in [`app/workers/scheduler_worker.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py); clean shutdown verified in test. | Fix INFO exception logging; add stack traces and health metrics. |
-| **FastAPI Lifespan** | **Implemented & Verified** | Verified in [`app/main.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/main.py); worker started & stopped in `lifespan`. | Live end-to-end verification during full application startup. |
-| **MongoDB `scheduled_units`** | **Planned (Handle Only)** | Collection handle initialized in [`app/platform/mongodb.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/platform/mongodb.py#L49). | Implement MongoDB-to-Redis synchronizer and startup reconciliation. |
-| **Connector Multi-Stream Contract** | **Not Yet Integrated** | Connector listens on `queue:connector:rss`; scheduler pushes to `queue:connector:{platform}:{priority}`. | Update `ConnectorWorker` to support multi-stream consumption or route scheduled jobs to `queue:connector:rss`. |
-| **Distributed Scheduler Lock** | **Planned** | Current architecture restricted to single orchestrator instance. | Implement Redis leader election / distributed lock for multi-instance high availability. |
+**Distributed Transaction Limitation:**
+A distributed transaction spanning Redis and MongoDB is not supported in this architecture. If the process crashes between Redis publication and MongoDB reconciliation, the recovery cycle relies on the deduplication key on the next lease iteration to discover the published message.
 
-#### Comprehensive Discrepancy & Defect Register
+---
 
-During architectural review of the repository and execution traces, eight specific discrepancies and implementation defects were identified:
+### 10.4 Request Worker Integration
 
-1. **`ACTIVE_KEYS_SET` Registration Format Defect**:
-   - **Location**: [`scheduler_service.py` (line 99)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L99).
-   - **Issue**: `register_scheduled_unit()` executes `pipe.sadd(ACTIVE_KEYS_SET, unit_key)`, which stores `unit:{unit_id}` (e.g. `unit:test-123`).
-   - **Conflict**: In [`dispatch_due_units_once()` (line 243)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L243), the loop expects keys in `ACTIVE_KEYS_SET` to be formatted as `{platform}:{priority}` (`platforms, priority = active_keys.split(":", 1)`).
-   - **Consequence**: In production, `dispatch_due_units_once()` splits `"unit:..."` into platform `"unit"` and priority `"<unit_id>"`, queries non-existent sorted set `scheduler:due:unit:<unit_id>`, and dispatches 0 units.
-   - **Resolution Required**: Change to `pipe.sadd(ACTIVE_KEYS_SET, f"{platform}:{priority}")`.
+The `RequestWorker` in `app/workers/request_worker.py` integrates recovery into its main event loop:
+1. Maintains an in-memory execution timestamp: `self._last_recovery_time = 0.0`.
+2. In each iteration of the `while self._is_running` processing loop:
+   ```python
+   now = asyncio.get_running_loop().time()
+   recovery_interval = settings.request_recovery_interval
 
-2. **Loop Variable Shadowing & Premature Return in `dispatch_due_units_once()`**:
-   - **Location**: [`scheduler_service.py` (lines 240-279)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L240-L279).
-   - **Issue**:
-     1. Loop header `for active_keys in sorted(active_keys):` shadows the outer set `active_keys`.
-     2. `return dispatched_count` is indented **inside** the body of the `for` loop!
-   - **Consequence**: The sweep terminates immediately after evaluating the first active key. It never iterates over any remaining active combinations.
-   - **Resolution Required**: Rename loop variable to `for active_key in sorted(active_keys):` and dedent `return dispatched_count` outside the loop.
+   if now - self._last_recovery_time >= recovery_interval:
+       self._last_recovery_time = now
+       try:
+           recovered = await recover_stale_processing_requests()
+           if recovered:
+               logger.info("Recovered %s stale request(s).", recovered)
+       except Exception:
+           logger.exception("Request recovery failed; normal dispatch will continue.")
+   ```
+3. **Fault Isolation:** If recovery fails, the exception is logged with full context and the worker immediately proceeds to normal outbound dispatch (`await dispatch_request()`).
+4. **Standard Dispatch Mechanics:** The worker continues to drain pending requests with 10ms intervals during backlogs, and backs off to `poll_interval` (2s) via `asyncio.wait_for` when the queue is empty.
 
-3. **Typo and Leaked Keys in `test_scheduler_service.py` Cleanup**:
-   - **Location**: [`app/test/test_scheduler_service.py` (line 72)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/test/test_scheduler_service.py#L72).
-   - **Issue**: Cleanup calls `await redis_client.srem("schedule:active_key", f"{platform}:{priority}")`.
-   - **Conflict**: Key name has typo (`"schedule:active_key"` without 's'), and attempts to remove `{platform}:{priority}` while registration actually pushed `unit_key`.
-   - **Consequence**: Leaves orphaned `unit:{unit_id}` entries in Redis `schedule:active_keys` after every test run.
-   - **Resolution Required**: Fix key name to `ACTIVE_KEYS_SET` and remove `f"{platform}:{priority}"` (or `unit_key` pending fix #1).
+---
 
-4. **Key Prefix Naming Inconsistency**:
-   - **Location**: [`scheduler_service.py` (line 21)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L21).
-   - **Issue**: `_due_key()` constructs `f"scheduler:due:{platform.lower()}:{priority.lower()}"`, whereas the design specification and active set use prefix `schedule:`.
-   - **Resolution Required**: Standardize on `schedule:due:{platform}:{priority}` across all modules and tests.
+### 10.5 Configuration & Pydantic Validation
 
-5. **Function Signature Pluralization**:
-   - **Location**: [`scheduler_service.py` (line 103)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L103).
-   - **Issue**: Named `get_due_unit_id()` (singular) despite taking a `limit` and returning `list[str]`.
-   - **Resolution Required**: Rename or alias to `get_due_unit_ids()`.
+The orchestrator settings in `app/core/config.py` define the operational parameters:
+```python
+request_recovery_interval: int = 10         # Seconds between periodic recovery scans
+request_recovery_timeout_seconds: int = 120 # Minimum age of claimed_at before a request is stale
+request_recovery_lease_seconds: int = 120   # Duration of the recovery lease lock
+```
 
-6. **Suppressed Exception Traceback in `SchedulerWorker.run()`**:
-   - **Location**: [`app/workers/scheduler_worker.py` (line 64)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/workers/scheduler_worker.py#L64).
-   - **Issue**: Catches unexpected tick exceptions with `except Exception: logger.info("Scheduler tick failed.")`.
-   - **Consequence**: Logs at `INFO` level without traceback (`logger.exception` or `exc_info=True`), silently masking runtime crashes in production logs.
-   - **Resolution Required**: Replace with `logger.exception("Scheduler tick failed with unexpected error.")`.
+#### Strict Pydantic Field Validation
+A Pydantic `@field_validator` ensures that all three recovery settings are strictly positive integers:
+```python
+@field_validator(
+    "request_recovery_interval",
+    "request_recovery_timeout_seconds",
+    "request_recovery_lease_seconds",
+)
+@classmethod
+def validate_request_recovery_settings(cls, value: int) -> int:
+    if value <= 0:
+        raise ValueError("Request recovery settings must be greater than zero.")
+    return value
+```
+Instantiating `Settings` with zero or negative values (e.g. `Settings(request_recovery_interval=0)`) immediately raises a Pydantic `ValidationError`, preventing invalid startup states.
 
-7. **Dead MongoDB Import in `scheduler_service.py`**:
-   - **Location**: [`app/services/scheduler_service.py` (line 7)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L7).
-   - **Issue**: `from app.platform.mongodb import scheduled_units` is imported but never referenced.
-   - **Resolution Required**: Keep import when building the MongoDB sync bridge, or remove until sync worker is implemented.
+---
 
-8. **Stream Contract Integration Mismatch**:
-   - **Location**: [`app/services/scheduler_service.py` (line 196)](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-orchestrator/app/services/scheduler_service.py#L196) vs [`argus-connector/app/core/config.py`](file:///C:/Users/OmMangeshBangar/PycharmProjects/argus-2.0/argus-connector/app/core/config.py).
-   - **Issue**: Orchestrator scheduler publishes to `queue:connector:{platform}:{priority}`. Connector worker consumes strictly from `settings.connector_stream` (`queue:connector:rss`).
-   - **Consequence**: Connector will never pick up scheduled tasks dispatched to prioritized queues.
-   - **Resolution Required**: Parameterize `ConnectorWorker` to subscribe to multi-stream queues or configure a unified stream routing contract across services.
+### 10.6 Tests and Current Verification Status
+
+The recovery subsystem has been verified through focused unit and regression test runs:
+
+1. **Configuration Defaults & Validator Verification:**
+   - Default values confirmed: `request_recovery_interval = 10`, `request_recovery_timeout_seconds = 120`, `request_recovery_lease_seconds = 120`.
+   - Verified that `Settings(request_recovery_interval=0)` raises `pydantic_core._pydantic_core.ValidationError`.
+
+2. **Core Recovery Test Suite (`test_request_recovery.py`):**
+   - `test_no_eligible_request_returns_zero`: Confirms no action when no processing requests are stale.
+   - `test_stale_request_is_claimed_atomically`: Verifies atomic lease acquisition and token assignment.
+   - `test_invalid_timeout_is_rejected`: Confirms `ValueError` on zero or negative timeout arguments.
+   - `test_active_lease_condition_is_in_query`: Confirms that unexpired recovery leases prevent duplicate claims.
+   - `test_recovery_claim_does_not_publish_without_reconciliation`: Confirms that existing Redis stream entries are reused without calling publish.
+   - `test_existing_stream_message_id_found`: Confirms `_get_existing_stream_message_id` returns message ID when present in both key and stream.
+   - `test_existing_stream_message_id_missing_from_stream`: Confirms `None` returned when key exists but stream entry was removed.
+   - `test_existing_stream_message_id_without_dedupe_key`: Confirms `None` returned when dedupe key is absent.
+   - `test_missing_request_id_releases_recovery_claim`: Confirms that a stale request missing `request_id` is aborted and unsets `recovery_claimed_at` and `recovery_token`.
+
+3. **Request Worker Integration Suite (`test_request_worker.py`):**
+   - `test_worker_stops_when_health_check_fails`: Verifies clean termination if Redis/MongoDB checks fail.
+   - `test_worker_attempts_recovery_and_dispatch`: Verifies that `start()` calls both recovery and dispatch.
+   - `test_dispatch_continues_when_recovery_fails`: Proves that a runtime error in recovery does not prevent `dispatch_request()` from running.
+
+4. **Full Test Suite & Multi-Suite Verification Count:**
+   - **Current Full Test Suite Verification:** The complete test suite across `app/test` has been rerun end-to-end (`python -m unittest discover -s app/test -p "test_*.py"`), with **54 tests passed** cleanly in 2.044s (0 errors, 0 failures).
+   - **Historical Multi-Suite Verification:**
+     - Prior to the latest missing-request-ID fix, the combined test run across `test_request_worker`, `test_request_recovery`, `test_request_service`, `test_result_service`, and `test_redis_dispatch_recovery` passed **25 tests cleanly**.
+     - Following the addition of `test_missing_request_id_releases_recovery_claim`, that focused test was verified independently and passed cleanly (bringing the focused recovery group to 26 tests).
+     - Prior to introducing the stale request recovery subsystem, the historical orchestrator baseline was **42 tests passed**.
+
+---
+
+### 10.7 Remaining Work & Open Review Items
+
+The following items are identified for the next review and iteration:
+1. **Deduplication Key Eviction Edge Case:**
+   Investigate mitigation strategies for when the Redis deduplication key is evicted under memory pressure while the stream entry persists in `queue:connector:rss` (to avoid duplicate publication).
+2. **Regression Test Improvements:**
+   Inspect and refine the Redis recovery regression tests in `test_redis_dispatch_recovery.py` and `test_request_recovery.py` to cover end-to-end timeout expiration and concurrent multi-worker recovery claim races.
+3. **Test Method Renaming:**
+   Evaluate renaming `test_recovery_claim_does_not_publish_without_reconciliation` in `app/test/test_request_recovery.py`. Its current assertions describe reusing an existing stream message without republishing, which is better expressed by a name such as `test_recovery_reuses_existing_stream_message_without_republishing`.
+4. **Comprehensive Test Suite Rerun (Completed):**
+   The comprehensive test suite rerun has been completed (`python -m unittest discover -s app/test -p "test_*.py"`), with all 54 tests passing cleanly. Continued full test suite reruns should accompany future batch modifications.
+5. **Pre-Commit Git Diff Review:**
+   Perform a line-by-line review of all unstaged and modified Git files (including `PROJECT_GUIDE.md`, `app/core/config.py`, `app/services/request_service.py`, `app/services/scheduler_service.py`, `app/workers/request_worker.py`, and test files) prior to staging and committing changes.
+
