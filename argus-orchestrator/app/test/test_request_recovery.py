@@ -244,6 +244,98 @@ class TestRequestRecovery(unittest.IsolatedAsyncioTestCase):
         self.assertIn("recovery_claimed_at", update_doc["$unset"])
         self.assertIn("recovery_token", update_doc["$unset"])
 
+    async def test_missing_source_marks_request_failed_and_releases_claim(self):
+        stale_request = {
+            "_id": "mongo-id-missing-source",
+            "request_id": "req-missing-source",
+            "status": "processing",
+            "source_type": "rss",
+            "url": "https://example.com/feed.xml",
+            "metadata": {},
+            "claimed_at": datetime.now(timezone.utc) - timedelta(seconds=300),
+            "dispatched_at": None,
+        }
+        self.mongo.find_one_and_update.return_value = stale_request
+
+        with patch.object(
+            request_service,
+            "_get_existing_stream_message_id",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch.object(
+            request_service,
+            "_publish_request_idempotently",
+            new_callable=AsyncMock,
+        ) as publish_mock:
+            recovered_count = (
+                await request_service.recover_stale_processing_requests(
+                    stale_after_seconds=120
+                )
+            )
+
+        self.assertEqual(recovered_count, 0)
+        publish_mock.assert_not_awaited()
+        self.mongo.update_one.assert_awaited_once()
+
+        update_filter = self.mongo.update_one.await_args.args[0]
+        update_doc = self.mongo.update_one.await_args.args[1]
+
+        self.assertEqual(update_filter["_id"], "mongo-id-missing-source")
+        self.assertEqual(update_filter["status"], "processing")
+        self.assertIn("recovery_token", update_filter)
+
+        self.assertEqual(update_doc["$set"]["status"], "failed")
+        self.assertIn("source", update_doc["$set"]["error_message"])
+        self.assertIn("updated_at", update_doc["$set"])
+        self.assertIn("recovery_claimed_at", update_doc["$unset"])
+        self.assertIn("recovery_token", update_doc["$unset"])
+
+    async def test_missing_source_type_marks_request_failed_and_releases_claim(self):
+        stale_request = {
+            "_id": "mongo-id-missing-source-type",
+            "request_id": "req-missing-source-type",
+            "status": "processing",
+            "source": "bing",
+            "url": "https://example.com/feed.xml",
+            "metadata": {},
+            "claimed_at": datetime.now(timezone.utc) - timedelta(seconds=300),
+            "dispatched_at": None,
+        }
+        self.mongo.find_one_and_update.return_value = stale_request
+
+        with patch.object(
+            request_service,
+            "_get_existing_stream_message_id",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch.object(
+            request_service,
+            "_publish_request_idempotently",
+            new_callable=AsyncMock,
+        ) as publish_mock:
+            recovered_count = (
+                await request_service.recover_stale_processing_requests(
+                    stale_after_seconds=120
+                )
+            )
+
+        self.assertEqual(recovered_count, 0)
+        publish_mock.assert_not_awaited()
+        self.mongo.update_one.assert_awaited_once()
+
+        update_filter = self.mongo.update_one.await_args.args[0]
+        update_doc = self.mongo.update_one.await_args.args[1]
+
+        self.assertEqual(update_filter["_id"], "mongo-id-missing-source-type")
+        self.assertEqual(update_filter["status"], "processing")
+        self.assertIn("recovery_token", update_filter)
+
+        self.assertEqual(update_doc["$set"]["status"], "failed")
+        self.assertIn("source_type", update_doc["$set"]["error_message"])
+        self.assertIn("updated_at", update_doc["$set"])
+        self.assertIn("recovery_claimed_at", update_doc["$unset"])
+        self.assertIn("recovery_token", update_doc["$unset"])
+
 
 if __name__ == "__main__":
     unittest.main()

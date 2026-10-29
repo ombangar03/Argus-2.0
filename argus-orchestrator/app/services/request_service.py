@@ -214,6 +214,33 @@ async def dispatch_request() -> Optional[ConnectorRequest]:
 
 
 
+async def _mark_stale_request_failed(
+    stale_request: dict,
+    recovery_token: str,
+    error_message: str,
+) -> None:
+    """Mark a malformed stale request as failed and release its recovery lease."""
+    now = datetime.now(timezone.utc)
+    await rss_requests.update_one(
+        {
+            "_id": stale_request["_id"],
+            "status": "processing",
+            "recovery_token": recovery_token,
+        },
+        {
+            "$set": {
+                "status": "failed",
+                "error_message": error_message,
+                "updated_at": now,
+            },
+            "$unset": {
+                "recovery_claimed_at": "",
+                "recovery_token": "",
+            },
+        },
+    )
+
+
 async def recover_stale_processing_requests(
     stale_after_seconds: Optional[int] = None,
 ) -> int:
@@ -264,43 +291,70 @@ async def recover_stale_processing_requests(
     request_id = stale_request.get("request_id")
 
     try:
-
-        if not request_id:
+        if not request_id or (isinstance(request_id, str) and not request_id.strip()):
+            error_msg = "Validation error: missing required field(s): request_id"
             logger.error(
-                "Stale MongoDB request %s has no request_id.",
+                "Stale MongoDB request %s has no valid request_id.",
                 stale_request.get("_id"),
             )
-
-            await rss_requests.update_one(
-                {
-                    "_id": stale_request["_id"],
-                    "status": "processing",
-                    "recovery_token": recovery_token,
-                },
-                {
-                    "$unset": {
-                        "recovery_claimed_at": "",
-                        "recovery_token": "",
-                    },
-                    "$set": {
-                        "updated_at": datetime.now(timezone.utc),
-                    },
-                },
+            await _mark_stale_request_failed(
+                stale_request=stale_request,
+                recovery_token=recovery_token,
+                error_message=error_msg,
             )
             return 0
-
 
         # Reuse the message if it is still present in the Redis stream.
         message_id = await _get_existing_stream_message_id(request_id)
 
         if not message_id:
-            connector_request = ConnectorRequest(
-                request_id=request_id,
-                source=stale_request["source"],
-                source_type=stale_request["source_type"],
-                source_url=stale_request["url"],
-                metadata=stale_request.get("metadata") or {},
-            )
+            missing_fields = [
+                field
+                for field in ("request_id", "source", "source_type", "url")
+                if not stale_request.get(field)
+                or (
+                    isinstance(stale_request.get(field), str)
+                    and not stale_request[field].strip()
+                )
+            ]
+            if missing_fields:
+                error_msg = (
+                    f"Validation error: missing required field(s): "
+                    f"{', '.join(missing_fields)}"
+                )
+                logger.error(
+                    "Stale request %s failed validation: %s",
+                    request_id,
+                    error_msg,
+                )
+                await _mark_stale_request_failed(
+                    stale_request=stale_request,
+                    recovery_token=recovery_token,
+                    error_message=error_msg,
+                )
+                return 0
+
+            try:
+                connector_request = ConnectorRequest(
+                    request_id=request_id,
+                    source=stale_request["source"],
+                    source_type=stale_request["source_type"],
+                    source_url=stale_request["url"],
+                    metadata=stale_request.get("metadata") or {},
+                )
+            except (ValidationError, KeyError) as exc:
+                error_msg = f"Validation error: {exc}"
+                logger.error(
+                    "Stale request %s failed validation: %s",
+                    request_id,
+                    error_msg,
+                )
+                await _mark_stale_request_failed(
+                    stale_request=stale_request,
+                    recovery_token=recovery_token,
+                    error_message=error_msg,
+                )
+                return 0
 
             payload = connector_request.model_dump()
             payload["metadata"] = json.dumps(payload["metadata"])
