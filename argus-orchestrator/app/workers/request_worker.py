@@ -87,7 +87,7 @@ class RequestWorker:
                 now = asyncio.get_running_loop().time()
                 recovery_interval = settings.request_recovery_interval
 
-                if now - self._last_recovery_time >=  recovery_interval:
+                if now - self._last_recovery_time >= recovery_interval:
                     self._last_recovery_time = now
 
                     try:

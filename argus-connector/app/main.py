@@ -5,7 +5,6 @@ from fastapi import FastAPI
 
 from app.core.logging import setup_logging
 from app.platform.redis import check_redis
-from app.workers.connector_worker import run_worker
 
 setup_logging()
 
@@ -13,7 +12,7 @@ worker = ConnectorWorker(block_ms = 2000, batch_size=5)
 worker_task = None
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     """Starts the background Redis consumer on server startup, and stops on shutdown."""
     global worker_task
     print("Argus Connector starting up on port 8001...")
@@ -21,7 +20,6 @@ async def lifespan(app: FastAPI):
     # start the rss worker loop as background task
     worker_task = asyncio.create_task(worker.start())
     yield
-
 
     #graceful shutdown
     print("Argus Connector shutting down...")

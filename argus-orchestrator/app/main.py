@@ -18,9 +18,8 @@ scheduler_worker = SchedulerWorker()
 background_tasks = []
 
 
-
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     """Start and stop the Orchestrator background workers."""
 
     print("Argus Orchestrator starting up on Port 8000...")

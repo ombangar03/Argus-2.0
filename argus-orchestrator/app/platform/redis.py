@@ -10,7 +10,10 @@ print("Redis URL:", settings.redis_url)
 
 redis_client = redis.from_url(
     settings.redis_url,
-    decode_responses = True
+    decode_responses = True,
+    socket_connection_timeout = 5,
+    scoket_timeout = 10,
+    health_check_interval = 30, 
 )
 
 async def check_redis():
