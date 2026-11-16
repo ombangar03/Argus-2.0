@@ -1,9 +1,12 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 class Settings(BaseSettings):
     app_name: str = "argus-orchestrator"
     app_env: str = "development"
-    mongo_url:str = "mongodb://localhost:27017"
+    mongo_url: str = "mongodb://localhost:27017"
     mongo_database: str = "argus"
     redis_url: str = "redis://localhost:6379/0"
     connector_stream: str = "queue:connector:rss"
@@ -18,7 +21,7 @@ class Settings(BaseSettings):
     dispatch_tick_seconds: int = 5
 
     model_config = SettingsConfigDict(
-        env_file = ".env",
+        env_file = BASE_DIR / ".env",
         case_sensitive=False,
         extra="ignore"
     )

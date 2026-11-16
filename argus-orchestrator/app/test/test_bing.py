@@ -8,22 +8,23 @@ import feedparser
 import requests
 from app.services.bing_service import build_bing_rss_url
 
-url = build_bing_rss_url("business news")
+if __name__ == "__main__":
+    url = build_bing_rss_url("business news")
 
-response = requests.get(
-    url,
-    headers = {"User-Agent": "Mozilla/5.0"},
-    timeout = 20,
-)
+    response = requests.get(
+        url,
+        headers = {"User-Agent": "Mozilla/5.0"},
+        timeout = 20,
+    )
 
-print("Status:", response.status_code)
+    print("Status:", response.status_code)
 
-feed = feedparser.parse(response.text)
+    feed = feedparser.parse(response.text)
 
-print("Articles:", len(feed.entries))
+    print("Articles:", len(feed.entries))
 
-for entry in feed.entries:
-    print("\nTitle:", entry.get("title"))
-    print("Link:", entry.get("link"))
-    print("Published:", entry.get("published"))
+    for entry in feed.entries:
+        print("\nTitle:", entry.get("title"))
+        print("Link:", entry.get("link"))
+        print("Published:", entry.get("published"))
 
